@@ -50,7 +50,7 @@ $ ciaoc hello
 @noindent This produces an executable called @tt{hello} in Unix
 systems and @tt{hello.cpx} under Win32 systems.  This executable can
 then be run in Win32 by double-clicking on it and on Unix systems by
-simply typing its name (see for @ref{Running executables from the
+simply typing its name (see @ref{Running executables from the
 command line} for how to run executables from the command line in
 Win32):
 
@@ -244,9 +244,9 @@ startup time @cite{ciaoc-entcs}:
   is not installed on that machine. To install (or distribute) such an
   executable, one only needs to copy the executable file itself and
   the appropriate engine for the target platform (See @ref{Installing
-  Ciao from the source distribution} or @ref{Installing Ciao from a
-  Win32 binary distribution} and @ref{Multiarchitecture installation}), and
-  to set things so that the executable can find the
+  Ciao})),
+  @comment{or Installing Ciao from a Win32 binary distribution and Multiarchitecture installation}
+  and to set things so that the executable can find the
   engine. @footnote{It is also possible to produce real standalone
   executables, i.e., executables that do not need to have an engine
   around. However, this is not automated yet, although it is planned
@@ -319,9 +319,7 @@ available when invoking @apl{ciaoc}:
 
 @sp{2}
 
-@begin{verbatim}
 @includefact{usage_message/1}
-@end{verbatim}
 ").
 
 % @item{Active modules:} @cindex{modules, active} 

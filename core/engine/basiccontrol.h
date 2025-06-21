@@ -12,7 +12,7 @@
 
 #include <ciao/eng_registry.h>
 
-CFUN__PROTO(wam, int, goal_descriptor_t *);
+CVOID__PROTO(wam, goal_descriptor_t *);
 
 /* ------------------------------------------------------------------------- */
 /* Support bytecode */
@@ -36,64 +36,52 @@ void init_some_bytecode(void);
 int p2_offset(uintmach_t insn);
 try_node_t *def_retry_c(cbool0_t proc, int arity);
 
-CBOOL__PROTO(set_trace_calls);
 CBOOL__PROTO(run_determ_c, tagged_t goal);
 
 /* ------------------------------------------------------------------------- */
 
 #if defined(DEBUG_NODE)
-# define AssignNodeFunctor(F, Y) \
-  {F = Y;}
+#define AssignNodeFunctor(Y) { w->choice->functor = Y; }
 #else
-# define AssignNodeFunctor(F, Y)
+#define AssignNodeFunctor(Y)
 #endif
 
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
 void wr_functor(char *s, definition_t *func);
 CVOID__PROTO(wr_call, char *s, definition_t *func);
 #endif
 
-#if defined(DEBUG)
-   /* stop_on_pred_calls = trace_calls | profile */
-# if defined(PROFILE)
-#  define PredTrace(X,Y) \
-{ \
-  AssignNodeFunctor(w->choice->functor, Y); \
-  if (stop_on_pred_calls) \
-  { \
-    if (trace_calls) wr_functor(X,Y); \
-    else { \
-      PROFILE__HOOK_CALL(Y); \
-    } \
-  } \
-}
-
-# else /* DEBUG & !PROFILE */
-#  define PredTrace(X,Y) \
-{ \
-  AssignNodeFunctor(w->choice->functor, Y); \
-  if (trace_calls) \
-    wr_call(Arg,X,Y); \
-}
-# endif
+/* Predicate tracer */
+#if defined(DEBUG_TRACE)
+#define PRED_TRACE(X,Y) if (debug_predtrace) { wr_functor(X,Y); }
 #else
-# if defined(DEBUG_NODE)
-#  define PredTrace(X,Y) \
-  AssignNodeFunctor(w->choice->functor, Y)
-# else
-#  define PredTrace(X,Y)
-# endif
+#define PRED_TRACE(X,Y)
 #endif
 
-#if defined(DEBUG)
+/* Predicate profiler */
+#if defined(ABSMACH_OPT__profile_calls)
+#define PRED_PROFILE(X,Y) if (profile_flags != 0) add_to_profiling(Y);
+#elif defined(ABSMACH_OPT__profilecc)
+#define PRED_PROFILE(X,Y) if (profile_flags != 0) { PROFILE__HOOK_CALL(Y); }
+#else
+#define PRED_PROFILE(X,Y)
+#endif
+
+#define PRED_HOOK(X,Y) { \
+  AssignNodeFunctor(Y); \
+  PRED_TRACE(X,Y); \
+  PRED_PROFILE(X,Y); \
+}
+
+#if defined(DEBUG_TRACE)
 #define TRACE_CHPT_CLEANUP(TopCChpt, TopNode) \
  if(debug_concchoicepoints) \
-    fprintf(stderr, "cut: removing chains (%x to %x)\n", \
-                    (int)TopCChpt, (int)TopNode);
+    fprintf(stderr, "cut: removing chains (%p to %p)\n", \
+                    TopCChpt, TopNode);
 
 #define TRACE_CHPT_CUT(NewNode) \
  if (debug_choicepoints)  \
-   fprintf(stderr, "Cutting: new chpt = %x\n", (int)NewNode);
+   fprintf(stderr, "Cutting: new chpt = %p\n", NewNode);
 #else
 #define TRACE_CHPT_CUT(NewNode)
 #define TRACE_CHPT_CLEANUP(TopCChpt, TopNode)
@@ -111,43 +99,52 @@ CVOID__PROTO(wr_call, char *s, definition_t *func);
 #endif
 
 /* ------------------------------------------------------------------------- */
+/* ConcChpt relocation (support for GC) */
+
+/* Relocate the concurrent topmost choicepoint */
+/* The chain of concurrent dynamic choicepoints has to be
+   relocated as well.  The initial TopConcChpt was set to be
+   the initial choice node.  MCL. */
+#define RelocateConcChptChain(choice_reloc_factor) do { \
+  choice_t *concchpt = TopConcChpt = RelocPtr(TopConcChpt, choice_reloc_factor); \
+  while(concchpt != InitialChoice) { \
+    DEBUG__TRACE(debug_concchoicepoints || debug_gc, \
+                 "*** %" PRIdm "(%" PRIdm ") Changing dynamic chpt@%p\n", \
+                 (intmach_t)Thread_Id, (intmach_t)GET_INC_COUNTER, \
+                 concchpt); \
+    /* TODO: wrong if it is Zero (null)? (JFMC) */ \
+    choice_t *prev = TermToPointerOrNull(choice_t, concchpt->x[PrevDynChpt]); \
+    AssignRelocPtr(prev, choice_reloc_factor); \
+    concchpt->x[PrevDynChpt] = PointerToTermOrZero(prev); \
+    concchpt = prev; \
+  } \
+} while(0);
+
+/* ------------------------------------------------------------------------- */
 
 #define P               p
-#define B               ((choice_t *)pt1)
-#define E               ((frame_t *)pt1)
-#define SetE(X)         (pt1 = (tagged_t *)(X))
-#define H               pt2
-#define S               pt2
+#define B               b
+#define E               e
+#define SetE(X)         (e = (X))
+#define H               cached_r_h
+#define S               r_s
 #define Func            ((definition_t *)P)
 
 /* ------------------------------------------------------------------------- */
 
 #define Setfunc(X)      { P = (bcp_t)(X); }
-#define SetA(Frame,Ptr) { \
-  w->local_top = (frame_t *)(Ptr); \
-}
 
-#define SETUP_PENDING_CALL(ADDR) { \
-  ComputeE;                           \
+#define SETUP_PENDING_CALL(E, ADDR) { \
+  intmach_t i; \
+  CODE_ALLOC(E);                                      \
   Y(0) = PointerToTerm(Func);                         \
-  for(i=0; i<Func->arity; i++) Y(i+1) = X(i);         \
+  for (i=0; i<Func->arity; i++) Y(i+1) = X(i);        \
   E->next_insn = w->next_insn;                        \
   E->frame = w->frame;                                \
-  w->frame = E;                                        \
-  w->next_insn = CONTCODE(i+1);                        \
-  SetA(E,Offset(E,EToY0+i+1));                         \
-  Setfunc(ADDR);                                       \
-}
-
-/* Do not edit this defn - it's a special case of ComputeA. */
-#define ComputeE { \
-  if (w->local_top) {                                        \
-    SetE(w->local_top);                                     \
-  } else {                                                   \
-    SetE(NodeLocalTop(w->choice));                              \
-    if (!StackYounger(E,w->frame))                              \
-      SetE(StackCharOffset(w->frame,FrameSize(w->next_insn))); \
-  }                                                     \
+  w->frame = E;                                       \
+  w->next_insn = CONTCODE(i+1);                       \
+  w->local_top = (frame_t *)Offset(E,EToY0+i+1);      \
+  Setfunc(ADDR);                                      \
 }
 
 /* ------------------------------------------------------------------------- */
@@ -169,13 +166,13 @@ static C_AINLINE FTYPE_ctype(f_o) fetch_opcode(bcp_t *p) {
 })
 #endif
 
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
 #define TRACE_INSTR 1
 #endif
 
 #if defined(TRACE_INSTR)
 CVOID__PROTO(dump_instr, bcp_t p);
-#define BcFetchOPCODE() (({ if (trace_instr) { dump_instr(Arg, P); } }), BcFetchOPCODE_())
+#define BcFetchOPCODE() (({ if (debug_instrace) { dump_instr(Arg, P); } }), BcFetchOPCODE_())
 #else
 #define BcFetchOPCODE() BcFetchOPCODE_()
 #endif

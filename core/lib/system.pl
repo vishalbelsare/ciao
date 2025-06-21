@@ -39,14 +39,14 @@
 :- endif.
 
 % ---------------------------------------------------------------------------
-:- export(time/1).
-:- doc(time(Time), "@var{Time} is unified with the number of seconds
+:- export(now/1).
+:- doc(now(Time), "@var{Time} is unified with the number of seconds
      elapsed since January, 1, 1970 (UTC).").
-:- trust pred time(?int).
+:- trust pred now(?int).
 :- if(defined(optim_comp)).
-:- '$props'(time/1, [impnat=cbool(prolog_time)]).
+:- '$props'(now/1, [impnat=cbool(prolog_now)]).
 :- else.
-:- impl_defined(time/1).
+:- impl_defined(now/1).
 :- endif.
 
 % ---------------------------------------------------------------------------
@@ -76,7 +76,7 @@ datime_struct(datime(Year,Month,Day,Hour,Min,Sec)) :-
 % ---------------------------------------------------------------------------
 :- export(datime/9).
 :- doc(datime(Time,Year,Month,Day,Hour,Min,Sec,WeekDay,YearDay),
-    "@var{Time} is as in @pred{time/1}. @var{WeekDay} is the number
+    "@var{Time} is as in @pred{now/1}. @var{WeekDay} is the number
     of days since Sunday, in the range 0 to 6.  @var{YearDay} is the
     number of days since January 1, in the range 0 to 365.").
 
@@ -205,7 +205,8 @@ getenvstr(Name, Value) :-
 setenvstr(Name, _Value) :- \+ atom(Name), !,
     throw(error(domain_error(atom,Name),setenvstr/2-1)).
 setenvstr(_Name, Value) :- \+ ( Value = [_|_] ; Value = [] ), !,
-    throw(error(domain_error(character_code_list,Value),setenvstr/2-2)).
+    % TODO:[JF] this is only a shallow check
+    throw(error(type_error(list,Value),setenvstr/2-2)).
 setenvstr(Name, Value) :-
     atom_codes(Value2, Value),
     c_set_env(Name, Value2).
@@ -544,8 +545,8 @@ file_property_(Other, _) :-
 % ---------------------------------------------------------------------------
 :- export(modif_time/2).
 :- doc(modif_time(File, Time), "The file @var{File} was last
-     modified at @var{Time}, which is in seconds since January, 1,
-     1970. Fails if @var{File} does not exist.").
+     modified at @var{Time}, which is in seconds since January, 1, 1970.
+     Fails if @var{File} does not exist.").
 :- pred modif_time(+atm, ?int).
 
 modif_time(Path, Time) :-
@@ -786,13 +787,14 @@ dev_null('/dev/null').
 
 % ---------------------------------------------------------------------------
 :- export(wait/2).
-:- trust pred wait(+Pid, -ReturnCode) :
-     (int(Pid),var(ReturnCode))
-     =>  (int(ReturnCode))
-   # "@pred{wait/2} waits for the process numbered @var{Pid}. Fails
-      if the process does not terminate normally or in case of error
-      (see C @tt{waitpid()} for details). @var{RetCode} is the process
-      return code.".
+:- trust pred wait(+Pid, -RetCode) : (int(Pid),var(RetCode)) => (int(RetCode))
+   # "@pred{wait/2} waits for the process numbered @var{Pid}. Fails if
+      the process does not terminate normally or in case of error (see
+      C @tt{waitpid()} for details). @var{RetCode} is a positive
+      number indicating the process return code if the process
+      terminated normally, or a negative number if the process
+      terminated due to a signal.".
+
 :- if(defined(optim_comp)).
 :- '$props'(wait/2, [impnat=cbool(prolog_wait)]).
 :- else.
@@ -884,11 +886,7 @@ dev_null('/dev/null').
 :- trust pred shell # "Executes the OS-specific system shell. When the
    shell process terminates, control is returned to Prolog. See
    @pred{shell/2} for details.".
-:- if(defined(optim_comp)).
-:- '$props'(shell/0, [impnat=cbool(prolog_unix_shell0)]).
-:- else.
-:- impl_defined(shell/0).
-:- endif.
+shell :- shell('', 0).
 
 % ---------------------------------------------------------------------------
 :- export(shell/1).
@@ -902,7 +900,8 @@ shell(Path) :- shell(Path, 0).
 :- export(shell/2).
 :- doc(shell(Command, RetCode), "Executes @var{Command} using the
    OS-specific system shell and stores the exit code in
-   @var{RetCode}.
+   @var{RetCode}. If @var{Command} is the empty atom @tt{\'\'}, 
+   executes the OS-specific system shell.
 
    On POSIX-like systems the system shell is specified by the
    @tt{SHELL} environment variable (@tt{$SHELL -c \"command\"} for
@@ -915,10 +914,13 @@ shell(Path) :- shell(Path, 0).
    a more robust way to launch external processes.").
 
 :- trust pred shell(+atm, ?int).
+
+shell(Path, RetCode) :- '$exec_shell'(Path, Pid), wait(Pid, RetCode).
+
 :- if(defined(optim_comp)).
-:- '$props'(shell/2, [impnat=cbool(prolog_unix_shell2)]).
+:- '$props'('$exec_shell'/2, [impnat=cbool(prolog_exec_shell)]).
 :- else.
-:- impl_defined(shell/2).
+:- impl_defined('$exec_shell'/2).
 :- endif.
 
 % ---------------------------------------------------------------------------

@@ -9,26 +9,33 @@
 #ifndef _CIAO_ENG_PROFILE_H
 #define _CIAO_ENG_PROFILE_H
 
-#if defined(OPTIM_COMP) && defined(ABSMACH_OPT__profile_calls)
-extern bool_t profile;
-extern bool_t prof_include_time;
+#if defined(ABSMACH_OPT__profilecc) || defined(ABSMACH_OPT__profile_calls)
 
-void dump_profile(void);
-void add_to_profiling(definition_t *functor);
+#define PROFILE_FLAGS_NONE      0 /* no profile */
+
+/* Note: keep in synk with table in profile.pl */
+#define PROFILE_FLAG_CALLS    0x1 /* count calls */
+#define PROFILE_FLAG_ROUGHTIME 0x2 /* measure rough time */
+
+extern intmach_t profile_flags;
 
 bool_t profile__get_opt(const char *arg);
+
+#endif
+
+#if defined(ABSMACH_OPT__profile_calls)
+void dump_profile(void);
+void add_to_profiling(definition_t *functor);
 #endif
 
 #if !defined(OPTIM_COMP)
 
-extern bool_t profile;
-extern bool_t profile_eng;
-extern bool_t profile_rcc;
-
 /* Uncomment this line to use the profiler as a tracer */
 /* #define PROFILE__TRACER 1 */
 
-#if defined(PROFILE)
+#if defined(ABSMACH_OPT__profilecc)
+extern bool_t profile_eng;
+extern bool_t profile_rcc;
 
 CVOID__PROTO(profile__hook_nop);
 CVOID__PROTO(profile__hook_call_nop, definition_t *f);
@@ -49,11 +56,9 @@ extern CVOID__PROTO((*profile__hook_neck_proceed));
 #if defined(PROFILE__TRACER)
 #define PROFILE__HOOK_FAIL          CVOID__CALL(profile__hook_fail)
 #define PROFILE__HOOK_PROCEED       CVOID__CALL(profile__hook_proceed)
-#define PROFILE__HOOK_NECK_PROCEED  CVOID__CALL(profile__hook_neck_proceed)
 #else
 #define PROFILE__HOOK_FAIL
 #define PROFILE__HOOK_PROCEED
-#define PROFILE__HOOK_NECK_PROCEED
 #endif
 
 #else
@@ -63,9 +68,13 @@ extern CVOID__PROTO((*profile__hook_neck_proceed));
 #define PROFILE__HOOK_CALL(FUNCTOR)
 #define PROFILE__HOOK_FAIL
 #define PROFILE__HOOK_PROCEED
-#define PROFILE__HOOK_NECK_PROCEED
 
 #endif /* PROFILE */
+
+CBOOL__PROTO(prolog_profile_flags_set);
+CBOOL__PROTO(prolog_profile_flags_get);
+CBOOL__PROTO(prolog_profile_dump);
+CBOOL__PROTO(prolog_profile_reset);
 
 #endif /* !defined(OPTIM_COMP) */
 

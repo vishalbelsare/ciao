@@ -139,6 +139,10 @@ bignum_size_t bn_compare(bignum_t *x, bignum_t *y);
 bignum_size_t bn_multiply(bignum_t *x, bignum_t *y, bignum_t *z, bignum_t *zmax);
 bignum_size_t bn_quotient_remainder_quot_wanted(bignum_t *x, bignum_t *y, bignum_t *z, bignum_t *zmax);
 bignum_size_t bn_quotient_remainder_quot_not_wanted(bignum_t *x, bignum_t *y, bignum_t *z, bignum_t *zmax);
+int bn_lsb(bignum_t *x);
+int bn_msb(bignum_t *x);
+int bn_popcount(bignum_t *x);
+int bn_getbit(bignum_t *x, int i);
 bignum_size_t bn_from_float(flt64_t f, bignum_t *z, bignum_t *zmax);
 #if defined(OPTIM_COMP)
 flt64_t bn_to_float(bignum_t *bn);
@@ -174,22 +178,16 @@ static inline CFUN__PROTO(bn_finish, tagged_t) {
 }
 #endif
 
-#if defined(OPTIM_COMP)
-#define BN_OC_SCALE 2 /* TODO: check, probably not needed now */
-#else
-#define BN_OC_SCALE 1
-#endif
-
 /* `Out` is the large or small int from `Str` in base `Base`.
  * `Arity` is the number of live X registers (in case of heap GC).
  * (assumes `Str` represents a number)
  */
-#define StringToInt(Str, Base, Out, Arity) ({                           \
+#define StringToInt(Str, Base, Out, LiveRegs) ({                        \
   bignum_size_t req = bn_from_string((Str),                             \
                                      (bignum_t *)G->heap_top,           \
                                      (bignum_t *)Heap_Warn_Pad(CONTPAD), (Base)); \
   if (req != 0) {                                                       \
-    CVOID__CALL(explicit_heap_overflow, (req*sizeof(tagged_t)+CONTPAD)*BN_OC_SCALE, (Arity)); \
+    CVOID__CALL(explicit_heap_overflow, (req*sizeof(tagged_t)+CONTPAD)*2, (LiveRegs)); \
     if (bn_from_string((Str),                                           \
                        (bignum_t *)G->heap_top,                         \
                        (bignum_t *)Heap_Warn_Pad(CONTPAD), (Base))) {   \

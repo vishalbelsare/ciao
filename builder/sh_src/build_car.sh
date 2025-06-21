@@ -60,7 +60,7 @@ car_run_exec_boot() { # cardir [opts]
     local engexec="$bld_objdir/$eng_name""$EXECSUFFIX"
     # TODO: allow debug, i.e.,
     #   engdbg="lldb -o run -o quit --"
-    #   engopts="--trace-calls --trace-instr --debug-gc"
+    #   engopts="--debug-trace-calls --debug-trace-instr --debug-gc"
     # TODO: simplify?
     # Select paths for ciao_builder compilation and execution
     # ('crossp' added from "$sh_boot_dir/autoboot.sh")
@@ -224,6 +224,7 @@ linkhere() {
 }
 
 # Writes the input to FILE, only if contents are different (preserves timestamps)
+# (equivalento to builder_aux:update_file_from_string/3)
 # TODO: Use 'update_file' in other parts of the build process (for some _auto.pl files and configuration options)
 update_file() { # FILE
     local t="$1""-tmp-$$"
@@ -443,6 +444,7 @@ car_config() { # (configure options)
                 Sparc64) opt__ARCH=Sparc ;;
                 x86_64)  opt__ARCH=i686 ;;
                 ppc64)   opt__ARCH=ppc ;;
+                ppc64le) opt__ARCH=ppc ;; # 32-bit PowerPC is only big-endian
                 *) true ;; # assume 32-bit
             esac
         fi
@@ -452,6 +454,7 @@ car_config() { # (configure options)
                 Sparc64) true ;;
                 x86_64)  true ;;
                 ppc64)   true ;;
+                ppc64le) true ;;
                 aarch64) true ;;
                 *) opt__ARCH=empty ;; # force error # TODO: emit error instead?
                 # *) echo "{configuration error: This executable requires a 64 bit architecture}" 1>&2 && exit 1 ;;

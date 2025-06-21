@@ -29,6 +29,7 @@
 :- module(fd_range_bits_unsafe,
     [
         fd_range_type/1,
+        fd_const_spec/1,
         fd_range_bound_t/1,
         fd_range_t/1,
 
@@ -67,19 +68,20 @@
         in_range/2
     %        portray/3
     ],
-    [assertions, regtypes,  fsyntax, dcg]).
+    [assertions, modes, regtypes,  fsyntax, dcg]).
 
 :- doc(title, "Range handling").
 
 :- use_module(library(clpfd/fd_utils), [min/3, max/3, clpfd_error/2]).
-:- use_module(library(clpfd/int_extra), [lsb/2, msb/2, bits_set/2]).
 
 :- use_module(library(lists), [last/2, append/3]).
 :- use_module(library(between), [between/3]).
 
+:- regtype fd_range_t/1.
 
 fd_range_type(prolog_bits_unsafe).
 fd_range_t(_).
+fd_const_spec := ~int | inf | sup.
 fd_range_bound_t(_).
 
 mymax(inf, X) := X :-!.
@@ -88,17 +90,16 @@ mymax(sup, _) := sup:-!.
 mymax(_, sup) := sup:-!.
 mymax(X, Y) := ~(fd_utils:max(X,Y)).
 
-:- pred default(fd_range_t).
+:- pred default(?fd_range_t).
 default := -1.
 
 :- pred new(+int, +int, -fd_range_t). 
 new(sup, sup, 0) :- !, fail.
 new(I, I, X) :- !, 
     X is 1 << I.
-new(Min, sup, X) :-!,
+new(Min, sup, X) :- !,
     X is  \ ((1 << ~mymax(Min,0)) - 1). 
-new(Min, Max, X) 
-    :- Min =< Max, !,
+new(Min, Max, X) :- Min =< Max, !,
     X is (((1 << (~mymax(Max,-1) +1)) -1) # ((1 << ~mymax(Min,0)) - 1)).
 new(_, _, 0).
 
@@ -121,14 +122,14 @@ non_empty(X):-
 
 min(X, M):-
     X \= 0,
-    int_extra:lsb(X, M).
+    '$lsb'(X, M).
 
 max(X, M):-
     X < 0, !,
     M = sup.
 max(X, M):-
     X \= 0,
-    int_extra:msb(X, M).
+    '$msb'(X, M).
 
 %% Gets the size of the range.
 size(0, M) :- !, M = 0.
@@ -137,7 +138,7 @@ size(X, M):-
     M = 999. % Emilio: use this hack for optim.
 % TODO:% M = sup.
 size(X, M):-
-    int_extra:bits_set(X, M).
+    '$popcount'(X, M).
 
 
 bound_add(sup, _, sup) :- !.
@@ -175,9 +176,11 @@ complement(X, Z) :-
     Z is \ X.
 
 remove(X, I, Y) :-
+    % TODO: check if "in place" modifications make sense ($setbit ?)
     Y is  X /\ \(1 << I).
 
 in_range(I, X) :-
+    % TODO: use '$getbit'/3 (or optimize arithmetic for this case)
     (X /\ (1<< I)) =\= 0.
 
 get_domain(_X) := _ :- 

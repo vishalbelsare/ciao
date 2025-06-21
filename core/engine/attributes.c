@@ -104,11 +104,7 @@ CVOID__PROTO(collect_pending_unifications, intmach_t wake_count) {
   tagged_t *tr = G->trail_top;
   tagged_t *h;
   tagged_t *tr0 = NULL;
-#if defined(OPTIM_COMP)
-  tagged_t *limit = w->choice->trail_top;
-#else
-  tagged_t *limit = TaggedToPointer(w->choice->trail_top);  
-#endif
+  tagged_t *limit = TrailTopUnmark(w->choice->trail_top);  
    
   h = G->heap_top;
   X(0) = atom_nil;
@@ -159,7 +155,7 @@ CVOID__PROTO(collect_one_pending_unification) {
 #if defined(OPTIM_COMP)
   tagged_t *limit = w->choice->trail_top;
 #else
-  tagged_t *limit = TaggedToPointer(w->choice->trail_top);  
+  tagged_t *limit = TrailTopUnmark(w->choice->trail_top);  
 #endif
   
   while ( !sofar && TrailYounger(tr,limit)) {
@@ -219,14 +215,12 @@ CBOOL__PROTO(c_setarg, intmach_t, tagged_t, tagged_t, bool_t);
 #define CELL_NEXT(CELL) *TaggedToArg((CELL),3)
 
 #define DEREF_AND_ENSURE_ATOM_MODKEY(KEY) ({                        \
-  tagged_t  tmp;                                                    \
-  DerefSwitch((KEY),                                                \
-              tmp,                                                  \
-              BUILTIN_ERROR(INSTANTIATION_ERROR, (KEY), 2););       \
+  DerefSw_HVAorCVAorSVA_Other((KEY),                                \
+           BUILTIN_ERROR(ERR_instantiation_error, (KEY), 2);,{});       \
   if (!TaggedIsATM((KEY))) {                                        \
     if ((!TaggedIsSTR((KEY))) ||                                    \
         (TaggedToHeadfunctor((KEY)) != SetArity(atom_user, 1)))        \
-      { BUILTIN_ERROR(TYPE_ERROR(STRICT_ATOM), (KEY), 2); }         \
+      { BUILTIN_ERROR(ERR_type_error(atom), (KEY), 2); }         \
     (KEY) = atom_user;                                              \
   }                                                                 \
 })
@@ -275,12 +269,12 @@ CBOOL__PROTO(get_attr__3) {
 CBOOL__PROTO(put_attr__3) {
   ERR__FUNCTOR("attr_rt:put_attr", 3);
 
-  tagged_t var, k, key, val, complex, prev, next, tmp, *ptr;
+  tagged_t var, k, key, val, complex, prev, next, *ptr;
 
   var=X(0); 
-  DerefSwitch(var, tmp, goto put_attr__3__var;);
+  DerefSw_HVAorCVAorSVA_Other(var, goto put_attr__3__var;, {});
   
-  BUILTIN_ERROR(UNINSTANTIATION_ERROR, var, 1);
+  BUILTIN_ERROR(ERR_uninstantiation_error, var, 1);
 
  put_attr__3__var:
 

@@ -67,7 +67,7 @@ extern tagged_t atom_gen_tree_backtracking;
     (*(CALLID))->last_ans = NULL;                                       \
     (*(CALLID))->first_cons = NULL;                                     \
     (*(CALLID))->last_cons = NULL;                                      \
-    ComputeA(Arg->local_top,Arg->choice);                                 \
+    GetFrameTop(Arg->local_top,Arg->choice,G->frame);                   \
     (*(CALLID))->local_top = Arg->local_top;                            \
     (*(CALLID))->heap_top = Arg->heap_top;                              \
     (*(CALLID))->stack_freg = StackFReg;                                \
@@ -121,15 +121,15 @@ extern tagged_t atom_gen_tree_backtracking;
             if (TYPE)                                                   \
               {                                                         \
                 push_choicept((ARG),address_nd_consume_answer_attr_c);  \
-                (ARG)->choice->term[3] = ARG3;                            \
-                (ARG)->choice->term[4] = ARG4;                            \
+                (ARG)->choice->x[3] = ARG3;                            \
+                (ARG)->choice->x[4] = ARG4;                            \
               }                                                         \
             else                                                        \
               push_choicept((ARG),address_nd_consume_answer_c);         \
-            (ARG)->choice->term[0] = (tagged_t)(SF);                      \
-            (ARG)->choice->term[1] = (tagged_t)(CALLID)->first_ans;       \
-            (ARG)->choice->term[2] = (tagged_t)(CALLID);                  \
-            /*(ARG)->choice->term[2] = (tagged_t)clone_space(space);*/    \
+            (ARG)->choice->x[0] = (tagged_t)(SF);                      \
+            (ARG)->choice->x[1] = (tagged_t)(CALLID)->first_ans;       \
+            (ARG)->choice->x[2] = (tagged_t)(CALLID);                  \
+            /*(ARG)->choice->x[2] = (tagged_t)clone_space(space);*/    \
             /*struct subs_factor *answer = get_trie_answer((ARG),*/     \
             /*(CALLID)->first_answer->answer,(SF)->attr_vars); */       \
             get_trie_answer((ARG),(CALLID)->first_ans->node, (SF));     \
@@ -141,12 +141,16 @@ extern tagged_t atom_gen_tree_backtracking;
               }                                                         \
             return TRUE;                                                \
           }                                                             \
-        checkdealloc((SF)->vars,(SF)->size * sizeof(tagged_t));         \
-        checkdealloc((SF)->attrs,(SF)->attr_size * sizeof(tagged_t));   \
-        checkdealloc((tagged_t *)(SF),sizeof(struct sf));               \
+        checkdealloc_sf((SF));                                          \
         return FALSE;                                                   \
       }                                                                 \
   }
+
+#define checkdealloc_sf(SF) ({ \
+  checkdealloc_ARRAY(tagged_t, (SF)->size, (SF)->vars); \
+  checkdealloc_ARRAY(tagged_t, (SF)->attr_size, (SF)->attrs); \
+  checkdealloc_TYPE(struct sf, (SF)); \
+})
 
 #define INSERT_CONSUMER(GEN,CONS)                                       \
   {                                                                     \

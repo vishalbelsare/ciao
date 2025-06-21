@@ -29,25 +29,25 @@ dir_to_bundle(BundleDir, Bundle) :-
 % ---------------------------------------------------------------------------
 
 :- use_module(engine(stream_basic)).
-:- use_module(engine(internals), [ciao_root/1, ciao_path/1]).
+:- use_module(engine(internals), [ciao_wksp/2]).
 :- use_module(library(pathnames), [path_get_relative/3]).
 
-:- export(lookup_workspace/2).
-% Detect the workspace for the given File (a directory or normal
-% file), using ciao_root/1 and ciao_path/1.
-lookup_workspace(File, Path) :-
+:- export(lookup_workspace/3).
+% @var{Wksp} is the workspace for the given @var{File} (a directory or
+% normal file), using ciao_wksp/2. @var{Rel} is the
+% relative path within the workspace.
+lookup_workspace(File, Wksp, Rel) :-
     fixed_absolute_file_name(File, '.', Path0),
-    ( lookup_workspace_(Path0, Path1) ->
-        Path1 = Path
+    ( lookup_workspace_(Path0, Wksp1, Rel1) ->
+        Wksp = Wksp1, Rel = Rel1
     ; fail
     ).
 
-lookup_workspace_(Path0, Path) :-
-    ( ciao_path(Path)
-    ; ciao_root(Path)
-    ),
-    ( Path0 = Path -> true
-    ; path_get_relative(Path, Path0, _) % Path0 is relative to Path
+% (see bundle_paths:bundle_workspace/2)
+lookup_workspace_(Path0, Wksp, Rel) :-
+    ciao_wksp(Wksp, WkspBase),
+    ( Path0 = WkspBase -> Rel = ''
+    ; path_get_relative(WkspBase, Path0, Rel) % Path0 is relative to Path
     ).
 
 % ===========================================================================
@@ -233,7 +233,7 @@ update_file_from_clauses(Clauses, Path, NewOrOld) :-
 % Like @pred{string_to_file/2} but preserves timestamp if file
 % contents have not changed.
 update_file_from_string(String, Path, NewOrOld) :-
-    mktemp_in_tmp('clauses-XXXXXX', File),
+    mktemp_in_tmp('string-XXXXXX', File),
     string_to_file(String, File),
     move_if_diff(File, Path, NewOrOld).
 

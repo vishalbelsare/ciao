@@ -243,7 +243,7 @@ checkmod() {
     # TODO: do not touch, clean the user cache!
     touch ${prg}.pl && \
         echo "Compiling module ${prg}" && \
-#       CIAORTOPTS="-proft" "$bin_dir"/ciao oc:comp --do compile ${prg} && \
+#       CIAORTOPTS="--profile-roughtime" "$bin_dir"/ciao oc:comp --do compile ${prg} && \
         "$bin_dir"/ciao oc:comp --comp-stats --do compile ${prg} && \
         echo "Generating native code (if required) for module ${prg}" && \
         "$bin_dir"/ciao oc:comp --do archcompile ${prg} || return 1    
@@ -426,6 +426,33 @@ function mtsys_evalmod() {
             "${mtsys_outdir}/${temp}".car/run
             "$bin_dir"/ciaodump-oc --module dectok ${mtsys_outdir}/${temp} 2>/dev/null | head -1 # Print bytecode size
             ;;
+        ciaowasm32 )
+            rm -f ${mtsys_outdir}/${temp}.itf
+            rm -f ${mtsys_outdir}/${temp}.po
+            cpp -DSYSTEM=ciao -DCIAO -DOPT_MASK=0 -C -P < ${mod}.pl > ${mtsys_outdir}/${temp}.pl
+            # TODO: missing get size of object
+            echo > ${mtsys_outdir}/${temp}.object
+            echo -ne "use_module('${mtsys_outdir}/${temp}.pl').\nmain, halt.\n" | CIAOARCH=wasm32 node "$ciaoroot"/build/site/js/ciao-prolog.js
+            sizefield "${mtsys_outdir}/${temp}.object"
+            ;;
+        ciaowasm64 )
+            rm -f ${mtsys_outdir}/${temp}.itf
+            rm -f ${mtsys_outdir}/${temp}.po
+            cpp -DSYSTEM=ciao -DCIAO -DOPT_MASK=0 -C -P < ${mod}.pl > ${mtsys_outdir}/${temp}.pl
+            # TODO: missing get size of object
+            echo > ${mtsys_outdir}/${temp}.object
+            echo -ne "use_module('${mtsys_outdir}/${temp}.pl').\nmain, halt.\n" | CIAOARCH=wasm64 node "$ciaoroot"/build/site/js/ciao-prolog.js
+            sizefield "${mtsys_outdir}/${temp}.object"
+            ;;
+        ciaowasm32p64 )
+            rm -f ${mtsys_outdir}/${temp}.itf
+            rm -f ${mtsys_outdir}/${temp}.po
+            cpp -DSYSTEM=ciao -DCIAO -DOPT_MASK=0 -C -P < ${mod}.pl > ${mtsys_outdir}/${temp}.pl
+            # TODO: missing get size of object
+            echo > ${mtsys_outdir}/${temp}.object
+            echo -ne "use_module('${mtsys_outdir}/${temp}.pl').\nmain, halt.\n" | CIAOARCH=wasm32p64 node "$ciaoroot"/build/site/js/ciao-prolog.js
+            sizefield "${mtsys_outdir}/${temp}.object"
+            ;;
         sicstus )
             cpp -DSYSTEM=sicstus -DSICSTUS -DOPT_MASK=0 -C -P < ${mod}.pl > ${mtsys_outdir}/${temp}.pl
             # TODO: missing get size of object
@@ -538,6 +565,9 @@ case ${action} in
     mtsys-evalmod-ciao_1_6) mtsys_evalmod ciao_1_6 ${module_name} ;;
     mtsys-evalmod-ciao2) mtsys_evalmod ciao2 ${module_name} ;;
     mtsys-evalmod-ciao3) mtsys_evalmod ciao3 ${module_name} ;;
+    mtsys-evalmod-ciaowasm32) mtsys_evalmod ciaowasm32 ${module_name} ;;
+    mtsys-evalmod-ciaowasm64) mtsys_evalmod ciaowasm64 ${module_name} ;;
+    mtsys-evalmod-ciaowasm32p64) mtsys_evalmod ciaowasm32p64 ${module_name} ;;
     mtsys-checkmod-ciao2) mtsys_checkmod ciao2 ${module_name} ;;
     mtsys-checkmod-ciao3) mtsys_checkmod ciao3 ${module_name} ;;
     mtsys-savemod-ciao2) mtsys_savemod ciao2 ${module_name} ;;

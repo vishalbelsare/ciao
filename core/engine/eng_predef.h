@@ -20,6 +20,31 @@
 /* Automatically generated configuration and basic definitions */
 #include <ciao/configure.h>
 
+/* Collect garbage collection's statistics */
+#define USE_GC_STATS 1
+
+/* TODO: hmmm ... makes abort much slower */ /* TODO:[oc-merge] disabled in OC, probably not in the right way */
+#define WAIT_THREAD_CANCELLED 1
+
+#if !defined(OPTIM_COMP) && defined(DEBUG)
+/* TODO: rename DEBUG flag? */
+#define DEBUG_TRACE 1
+#if !defined(USE_LOWRTCHECKS)
+#define USE_LOWRTCHECKS 1
+#endif
+#endif
+
+#if !defined(OPTIM_COMP) && defined(PROFILE)
+/* Default profiler enabled when PROFILE is activated */
+//#define ABSMACH_OPT__profilecc 1 // enable profilecc (requires separate lib)
+#define ABSMACH_OPT__profile_calls 1 // enable builtin naive profiler
+#endif
+
+#define USE_BUILTIN_ENV 1 /* enable GC in functor/3 and =../2 */
+
+/* Enable larger arity in terms (not in procedures) if possible */
+#define USE_BIG_ARITY 1
+
 /* ------------------------------------------------------------------------- */
 /* Function and variable attributes */
 
@@ -42,8 +67,9 @@ typedef uintptr_t intp_t; /* integer that can contain pointers */
 typedef double flt64_t;
 
 /* ------------------------------------------------------------------------- */
+/* TODO:[oc-merge] generated in basiccontrol.native.h from eng_predef.pl */
 
-#if defined(x86_64) || defined(Sparc64) || defined(ppc64) || defined(aarch64) /* 64-bit */
+#if defined(x86_64) || defined(Sparc64) || defined(ppc64) || defined(ppc64le) || defined(aarch64) || defined(wasm64) || defined(wasm32p64) /* 64-bit */
 /* Definitions for 64-bit tag scheme */
 typedef int64_t intmach_t;
 typedef uint64_t uintmach_t;
@@ -73,30 +99,46 @@ typedef int32_t bool_t; /* TODO: Make it like 'char' */
 #define TRUE 1
 #endif
 
-/* Sizes */
-#if tagged__size == 64
-#define INTMACH_MAX INT64_MAX
-#define INTMACH_MIN INT64_MIN
-#elif tagged__size == 32
-#define INTMACH_MAX INT32_MAX
-#define INTMACH_MIN INT32_MIN
-#endif
-
 /* Type to hold time values (ticks, etc.) */
 typedef int64_t inttime_t;
 
-/* ------------------------------------------------------------------------- */
-/* Macros for formatting integers */
+typedef tagged_t blob_unit_t; // TODO:[oc-merge] make OC use this def?
 
-#include <inttypes.h> /* for PRI* macros */
-#if tagged__size == 64
-#define PRIum PRIu64 /* intmach_t using %u */
-#define PRIdm PRId64 /* intmach_t using %d */
-#define PRIxm PRIx64 /* intmach_t using %x */
-#elif tagged__size == 32
-#define PRIum PRIu32 /* intmach_t using %u */
-#define PRIdm PRId32 /* intmach_t using %d */
-#define PRIxm PRIx32 /* intmach_t using %x */
+typedef int arity_t; /* type for arity */ // TODO:[oc-merge] intmach_t in OC
+
+/* ------------------------------------------------------------------------- */
+/* Some helper integer and pointer functions */
+
+/* Prepare a mask like: */
+/*    <-bits-><--offset--> */
+/* 00011111111000000000000 */
+#define MakeMask(Type, Bits, Offset) ((((Type)1<<(Bits))-1)<<(Offset))
+
+/* Deposit Source into Mask:ed portion of Dest */
+#define Deposit(Source,Mask,Dest) (((Source)&(Mask))|((Dest)& ~(Mask)))
+
+/* Alignment */
+#define ALIGN_TO(A,X) ((((X)-1) & -(A))+(A))
+
+/* Byte-based offsets for tagged_t */
+#define CharOffset(X,O) ((tagged_t *)((char *)(X) + (O)))
+
+/* ------------------------------------------------------------------------- */
+
+/* (memory management constants for 4 reserved upper bits in pointers;
+   defined dynamically by configure.c) */
+#define SMALLPTR_UPPERBITS 4
+#define SMALLPTR_LOWERBITS 2 /* no. of GC bits, concides with 32bit align */
+
+#if SMALLPTR_UPPERBITS == 4
+#define SMALLPTR_BASE MallocBase4
+#if !(defined(USE_MMAP) && OWNMALLOC_MmapAllowed)
+#define OWNMALLOC_BLOCKSIZE MIN_MEM_ALLOC_4
+#endif
+#define OWNMALLOC_MmapAllowed MmapAllowed4
+#define OWNMALLOC_MmapSize MmapSize4
+#else
+#error "Unsupported SMALLPTR_UPPERBITS"
 #endif
 
 /* ------------------------------------------------------------------------- */

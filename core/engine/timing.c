@@ -7,14 +7,13 @@
  */
 
 #include <string.h>
-
 #include <sys/types.h>
 #include <time.h>
 
 #include <ciao/eng.h>
 #include <ciao/timing.h>
 
-#if (defined(Solaris) || defined(LINUX) || defined(DARWIN) || defined(Win32) || defined(BSD)) \
+#if (defined(Solaris)||defined(LINUX)||defined(DARWIN)||defined(Win32)||defined(BSD)) \
     && !defined(_WIN32) && !defined(_WIN64)
 
 #include <sys/time.h>
@@ -30,6 +29,25 @@ inttime_t systemtick(void) {
   struct rusage rusage;
   getrusage(RUSAGE_SELF,&rusage);
   return ((inttime_t)rusage.ru_stime.tv_sec) * 1000000 + rusage.ru_stime.tv_usec;
+}
+
+static void init_frequency_info(void) {
+  ciao_stats.userclockfreq = 1000000;
+  ciao_stats.systemclockfreq = 1000000;
+}
+
+#elif defined(EMSCRIPTEN)
+
+#include <emscripten.h>
+
+inttime_t usertick(void) {
+  /* Returns time in milliseconds, convert to microseconds */
+  return (inttime_t)(emscripten_get_now() * 1000);
+}
+
+inttime_t systemtick(void) {
+  /* TODO: In browser context, no distinction between user/system time; is it possible in nodejs? */
+  return usertick();
 }
 
 static void init_frequency_info(void) {
@@ -154,7 +172,7 @@ int gettimeofday(struct timeval *tv, void *tz)
   the last call to walltime/1 . The first call returns walltime since the
   start of the execution.  */
 
-/* Shared but locked?  Initialized in init_once() */
+/* Shared but locked?  Initialized in engine_init() */
 
 inttime_t walltick(void) {
   struct timeval tp;
@@ -181,143 +199,104 @@ static CBOOL__PROTO(generic_time,
                     inttime_t (*time_function)(void),
                     inttime_t starttick,
                     inttime_t *lasttick,
-                    inttime_t clockfreq)
-{
+                    inttime_t clockfreq) {
   /*int st,lt; */
   inttime_t st,lt;
   inttime_t t;
   tagged_t x;
-  
+
   t = time_function();
   st = t - starttick;
   lt = t - *lasttick;
   *lasttick = t;
   /* while ciao not support inttime_t, lt and st must be cast to
     flt64_t */
-  MakeLST(x,BoxFloat((((flt64_t)lt)*1000)/clockfreq),atom_nil);
-  MakeLST(x,BoxFloat((((flt64_t)st)*1000)/clockfreq),x);
+  tagged_t k,j;
+  k=BoxFloat(((flt64_t)lt)*1000/clockfreq);
+  j=BoxFloat(((flt64_t)st)*1000/clockfreq);
+  MakeLST(x,k,atom_nil);
+  MakeLST(x,j,x);
   CBOOL__LASTUNIFY(x,X(0));
 }
 
 /* runtime returns a list of two floats
  * giving time in milliseconds. The first number gives time from the system 
  * start_up and the second since the last call to runtime */
-CBOOL__PROTO(prolog_runtime)
-{
-  return generic_time(Arg, 
-                      RunTickFunc,
-                      ciao_stats.starttick, 
-                      &ciao_stats.lasttick,
-                      RunClockFreq(ciao_stats));
-}
 
-CBOOL__PROTO(prolog_usertime)
-{
-  return generic_time(Arg, 
-                      usertick,
-                      ciao_stats.startusertick,
-                      &ciao_stats.lastusertick,
-                      ciao_stats.userclockfreq);
+CBOOL__PROTO(prolog_walltime) {
+  CBOOL__LASTCALL(generic_time, walltick, ciao_stats.startwalltick, &ciao_stats.lastwalltick, ciao_stats.wallclockfreq);
 }
-
-CBOOL__PROTO(prolog_systemtime)
-{
-  return generic_time(Arg, 
-                      systemtick, 
-                      ciao_stats.startsystemtick,
-                      &ciao_stats.lastsystemtick,
-                      ciao_stats.systemclockfreq);
+CBOOL__PROTO(prolog_runtime) {
+  CBOOL__LASTCALL(generic_time, RunTickFunc, ciao_stats.starttick, &ciao_stats.lasttick, RunClockFreq(ciao_stats));
 }
-
-CBOOL__PROTO(prolog_walltime)
-{
-  return generic_time(Arg, 
-                      walltick, 
-                      ciao_stats.startwalltick, 
-                      &ciao_stats.lastwalltick,
-                      ciao_stats.wallclockfreq);
+CBOOL__PROTO(prolog_usertime) {
+  CBOOL__LASTCALL(generic_time, usertick, ciao_stats.startusertick, &ciao_stats.lastusertick, ciao_stats.userclockfreq);
+}
+CBOOL__PROTO(prolog_systemtime) {
+  CBOOL__LASTCALL(generic_time, systemtick, ciao_stats.startsystemtick, &ciao_stats.lastsystemtick, ciao_stats.systemclockfreq);
 }
 
 /* New time medition functions */
 static CBOOL__PROTO(generic_tick,
                     inttime_t (*time_function)(void),
                     inttime_t starttick,
-                    inttime_t *lasttick)
-{
+                    inttime_t *lasttick) {
   /*int st,lt; */
   inttime_t st,lt;
   inttime_t t;
   tagged_t x;
-  
+
   t = time_function();
   st = t - starttick;
   lt = t - *lasttick;
   *lasttick = t;
   /* while ciao does not support inttime_t, lt and st must be cast to
     flt64_t */
-  MakeLST(x,BoxFloat((flt64_t)lt),atom_nil);
-  MakeLST(x,BoxFloat((flt64_t)st),x);
+  tagged_t k,j;
+  k = BoxFloat((flt64_t)lt);
+  j = BoxFloat((flt64_t)st);
+  MakeLST(x,k,atom_nil);
+  MakeLST(x,j,x);
   CBOOL__LASTUNIFY(x,X(0));  
 }
 
-CBOOL__PROTO(prolog_walltick)
-{
-  return generic_tick(Arg, 
-                      walltick, 
-                      ciao_stats.startwalltick,
-                      &ciao_stats.lastwalltick);
+CBOOL__PROTO(prolog_walltick) {
+  CBOOL__LASTCALL(generic_tick, walltick, ciao_stats.startwalltick, &ciao_stats.lastwalltick);
 }
 
-CBOOL__PROTO(prolog_usertick)
-{
-  return generic_tick(Arg, 
-                      usertick, 
-                      ciao_stats.startusertick,
-                      &ciao_stats.lastusertick);
+CBOOL__PROTO(prolog_usertick) {
+  CBOOL__LASTCALL(generic_tick, usertick, ciao_stats.startusertick, &ciao_stats.lastusertick);
 }
 
-CBOOL__PROTO(prolog_systemtick)
-{
-  return generic_tick(Arg, 
-                      systemtick, 
-                      ciao_stats.startsystemtick,
-                      &ciao_stats.lastsystemtick);
+CBOOL__PROTO(prolog_systemtick) {
+  CBOOL__LASTCALL(generic_tick, systemtick, ciao_stats.startsystemtick, &ciao_stats.lastsystemtick);
 }
 
-CBOOL__PROTO(prolog_runtick)
-{
-  return generic_tick(Arg, 
-                      RunTickFunc,
-                      ciao_stats.starttick,
-                      &ciao_stats.lasttick);
+CBOOL__PROTO(prolog_runtick) {
+  CBOOL__LASTCALL(generic_tick, RunTickFunc, ciao_stats.starttick, &ciao_stats.lasttick);
 }
 
 /* New time medition functions */
-static inline CBOOL__PROTO(generic_clockfreq, inttime_t clockfreq)
-{
-  /* while ciao not support inttime_t, return value must be cast to
-    flt64_t */
+/* while ciao not support inttime_t, return value must be cast to
+   flt64_t */
+static inline CBOOL__PROTO(generic_clockfreq, inttime_t clockfreq) {
   CBOOL__LASTUNIFY(BoxFloat((flt64_t)clockfreq),X(0));
 }
 
-CBOOL__PROTO(prolog_runclockfreq)
-{
-  return generic_clockfreq(Arg, RunClockFreq(ciao_stats));
+CBOOL__PROTO(prolog_runclockfreq) {
+  CBOOL__LASTCALL(generic_clockfreq, RunClockFreq(ciao_stats));
 }
 
-CBOOL__PROTO(prolog_userclockfreq)
-{
-  return generic_clockfreq(Arg, ciao_stats.userclockfreq);
+CBOOL__PROTO(prolog_userclockfreq) {
+  CBOOL__LASTCALL(generic_clockfreq, ciao_stats.userclockfreq);
 }
 
-CBOOL__PROTO(prolog_systemclockfreq)
-{
-  return generic_clockfreq(Arg, ciao_stats.systemclockfreq);
+CBOOL__PROTO(prolog_systemclockfreq) {
+  CBOOL__LASTCALL(generic_clockfreq, ciao_stats.systemclockfreq);
 }
 
-CBOOL__PROTO(prolog_wallclockfreq)
-{
-  return generic_clockfreq(Arg, ciao_stats.wallclockfreq);
+CBOOL__PROTO(prolog_wallclockfreq) {
+  CBOOL__LASTCALL(generic_clockfreq, ciao_stats.wallclockfreq);
 }
 
 void reset_timing(void) {

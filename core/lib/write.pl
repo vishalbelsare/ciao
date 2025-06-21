@@ -38,7 +38,7 @@
 
 :- doc(define_flag/3,"Defines flags as follows:
     @includedef{define_flag/3}
-    (See @ref{Changing system behaviour and various flags}).
+    (See @ref{Runtime system control and flags}).
 
     If flag is @tt{on}, lists which may be written as strings are.").
 
@@ -123,11 +123,11 @@ write_term_internal(Term, OptList, N) :-
  cero. If it is positive, it denotes the depth limit on printing compound
  terms. If it is cero, there is no limit. Default value is @tt{0} (no limit).
 
- @item @bf{priority(}@em{prio}@bf{):} @em{prio} is an integer between 1 and
- 1200. If the term to be printed has higher priority than @em{prio}, it will be
+ @item @bf{priority(}@em{prio}@bf{):} @em{prio} is an integer between 1 and 1200.
+ If the term to be printed has higher priority than @em{prio}, it will be
  printed parenthesized.  Default value is 1200 (no term parenthesized).
 
-@end{itemize}.").
+@end{itemize}").
 
 write_option(quoted(Qt)) :- boolean(Qt).
 write_option(ignore_ops(IO)) :- ignore_ops_flag(IO).

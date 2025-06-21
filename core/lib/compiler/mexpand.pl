@@ -1,12 +1,13 @@
-% This code is included in builtin.pl and in compiler.pl.
+% (included file)
+
+% This code is included in internals.pl and in c_itf.pl
+%
 % It uses the following facts (defined either in builtin or in compiler):
 %  imports/5    - MODULE imports from MODULE2 F/A, which resides in ENDMODULE
 %  meta_args/2  - MODULE has meta declaration META
 %  multifile/3  - MODULE defines multifile F/A
 %  defines/3    - MODULE defines F/A
 %  goal_trans/3 - MODULE defines goal translation G
-
-% Called from c_itf
 
 :- use_module(engine(hiord_rt), ['$meta_call'/1]).
 :- use_module(engine(meta_inc)).
@@ -23,8 +24,7 @@ body_expansion(V, M, QM, Mode, NA) :- var(V), !,
         this_module(internals), NA = V
     ; Mode = assert, this_module(c_itf) ->
         fail
-    ;
-        body_expansion(hiord_rt:call(V), M, QM, Mode, NA)
+    ; body_expansion(hiord_rt:call(V), M, QM, Mode, NA)
     ).
 body_expansion(QM:G, M, QM0, Mode, NG) :- !,
     ( atom(QM) ->
@@ -74,9 +74,11 @@ expand_goal(G, M, QM, NG) :-
       '$meta_call'(T), !.
 
 atom_expansion_add_goals(V, _, _, _, _, _, _) :- var(V), !, fail.
-atom_expansion_add_goals('$meta_call'(X), M, -, _Mode,
-                     'hiord_rt:call'(X), G, G) :-
+atom_expansion_add_goals('$meta_call'(X), M, -, _Mode, 'hiord_rt:call'(X), G, G) :-
     accessible_in(M, hiord_rt, '$meta_call', 1), !.
+atom_expansion_add_goals('$meta_exp'(Metatype, P, E), M, -, Mode, NCall, G, G) :-
+    accessible_in(M, hiord_rt, '$meta_exp', 3), !,
+    meta_expansion_arg1(P, Metatype, M, -, Mode, fail, NP, NCall, 'term_basic:='(NP,E)).
 atom_expansion_add_goals(Call, M, QM, Mode, NCall, G, G) :-
     functor(Call, call, N), N > 1, % call/n
     ( mexpand_imports(M, _, call, 2, HM) -> HM = hiord_rt ),
@@ -84,8 +86,7 @@ atom_expansion_add_goals(Call, M, QM, Mode, NCall, G, G) :-
     Call =.. [_, P| LAs],
     As =.. [''| LAs],
     N1 is N-1,
-    meta_expansion_arg1(P, pred(N1), M, QM, Mode, true, NP, NCall,
-                        'hiord_rt:call'(NP,As)).
+    meta_expansion_arg1(P, pred(N1), M, QM, Mode, true, NP, NCall, 'hiord_rt:call'(NP,As)).
 atom_expansion_add_goals(A, M, QM, Mode, NA, G, G_) :-
     functor(A, F, N),
     atom_expansion(A, F, N, M, QM, A1, RM),
@@ -125,7 +126,7 @@ unqualified_atom_expansion(A, F, N, M, NA, RM) :-
           module_concat(M, A, NA),
           RM = M,
           check_if_imported(M, F, N)
-    ; mexpand_imports(M, IM, F, N, EM) ->
+    ; mexpand_imports_last(M, IM, F, N, EM) ->
           module_concat(EM, A, NA),
           RM = EM,
           check_if_reimported(M, IM, F, N, EM)
@@ -136,29 +137,53 @@ unqualified_atom_expansion(A, F, N, M, NA, RM) :-
       RM = M
     ).
 
+:- if(defined(priority_first_import)). % First import has priority (old semantics)
+mexpand_imports_last(M, IM, F, N, EM) :- mexpand_imports(M, IM, F, N, EM).
+:- else.
+% Last import has priority (new semantics)
+% TODO:[oc-merge] keep in sync with modload.c and oc version of mexpand.pl
+
+:- use_module(engine(internals), ['$setarg'/4]).
+
+% mexpand_imports_last(+M, -IM, +F, +N, -EM):
+% Get last solution of imports (note that asserting imports in reverse
+% order may break source manipulating tools)
+mexpand_imports_last(M, IM, F, N, EM) :-
+    LastImported = last_import(-,-),
+    ( mexpand_imports(M, IM0, F, N, EM0),
+        atom(IM0), atom(EM0), % TODO: bug if not atoms! needed for nb setarg here
+        '$setarg'(1, LastImported, IM0, no),
+        '$setarg'(2, LastImported, EM0, no),
+        fail
+    ; true
+    ),
+    LastImported = last_import(IM,EM),
+    \+ EM = - .
+:- endif.
+
 check_if_imported(M, F, N) :- 
-    \+ redefining(M, F, N),
-    mexpand_imports(M, IM, F, N, _) ->
-      module_warning(imported_needs_qual(F, N, IM))
-    ; true.
+    ( \+ redefining(M, F, N),
+      mexpand_imports(M, IM, F, N, _) ->
+        module_warning(imported_needs_qual(F, N, IM))
+    ; true
+    ).
 
 check_if_reimported(M, IM, F, N, EM) :-
-    \+ redefining(M, F, N),
-    mexpand_imports(M, IM0, F, N, EM0),
-    EM0 \== EM ->
-      module_warning(imported_needs_qual(F, N, IM0, IM))
-    ; true.
+    ( \+ redefining(M, F, N),
+      mexpand_imports(M, IM0, F, N, EM0),
+      EM0 \== EM ->
+        module_warning(imported_needs_qual(F, N, IM0, IM))
+    ; true
+    ).
 
 atom_expansion_here(A, F, N, M, NA) :-
     mexpand_multifile(M, F, N), !,
     module_concat(multifile, A, NA).
 atom_expansion_here(A, F, N, M, NA) :-
-    (( mexpand_defines(M, F, N) ; M = user(_) ) -> true
+    ( ( mexpand_defines(M, F, N) ; M = user(_) ) -> true
     ; module_warning(not_defined(F, N, M))
     ),
     module_concat(M, A, NA).
-
-    
 
 % Called from c_itf
 
@@ -168,7 +193,8 @@ possibly_meta_expansion(F, N, A1, M, RM, Mode, NA, G, G_) :-
     % JF: This is a work around, not a good solution...
     ( expand_inside(Meta, RM) ->
         Primitive = true
-    ; mexpand_meta_args(RM, Meta, Primitive)
+    ; mexpand_meta_args(RM, Meta),
+      Primitive = fail
     ), !,
     functor(A1, F_, N_),
     meta_expansion_args(1, N_, A1, M, Mode, Meta, Primitive, NAL, G, G_),
@@ -191,11 +217,9 @@ meta_expansion_args(N, Max, G, M, Mode, Meta, Primitive, AL, NG, R) :-
     meta_expansion_args(N1, Max, G, M, Mode, Meta, Primitive, AL_, NG_, R).
 
 meta_expansion_arg(?, X, _M, _Mode, _Primitive, [X|AL], AL, R, R) :- !.
-meta_expansion_arg(addmodule(Type), X, M, Mode, Primitive,
-               AL0, AL, NG, NG_) :- !,
+meta_expansion_arg(addmodule(Type), X, M, Mode, Primitive, AL0, AL, NG, NG_) :- !,
     meta_expansion_arg(Type, X, M, Mode, Primitive, AL0, [M|AL], NG, NG_).
-meta_expansion_arg(addterm(Type), X, M, Mode, Primitive,
-               [NX,X|AL], AL, NG, NG_) :- !,
+meta_expansion_arg(addterm(Type), X, M, Mode, Primitive, [NX,X|AL], AL, NG, NG_) :- !,
     meta_expansion_type_(Type, X, M, -, Mode, Primitive, NX, NG, NG_).
 meta_expansion_arg(Type, X, M, Mode, Primitive, [NX|AL], AL, NG, NG_) :-
     meta_expansion_type_(Type, X, M, -, Mode, Primitive, NX, NG, NG_).
@@ -207,14 +231,15 @@ meta_expansion_type_(Type, X, M, QM, Mode, Primitive, NX, NG, NG_) :-
     ; meta_expansion_arg1(X, Type, M, QM, Mode, Primitive, NX, NG, NG_)
     ).
 
-meta_expansion_list(X, _, _, _, _, _, X, R, R) :-
-    var(X),
-    !.
-meta_expansion_list([], _,   _,  _,  _, _, [], R, R) :- !.
+meta_expansion_list(X, _, _, _, _, _, X, R, R) :- var(X), !.
+meta_expansion_list([], _, _,  _,  _, _, [], R, R) :- !.
 meta_expansion_list([E|Es], Type, M, QM, Mode, Primitive, [NE|NEs], G, R) :- !,
     meta_expansion_arg1(E, Type, M, QM, Mode, Primitive, NE, G, G_),
     meta_expansion_list(Es, Type, M, QM, Mode, Primitive, NEs, G_, R).
 
+meta_expansion_arg1(A, primitive(Type), M, QM, Mode, _Primitive, NA, G, R) :- !,
+    % (enable primitive metatype)
+    meta_expansion_arg1(A, Type, M, QM, Mode, true, NA, G, R).
 meta_expansion_arg1(A, Type, M, QM, Mode, Primitive, NA, R, R) :-
     expand_meta(A, Type, M, QM, Mode, XA), !,
     term_to_meta_or_primitive(Primitive, XA, NA).
@@ -278,7 +303,7 @@ expand_clause(H, M, QM, Mode, NH):- !,
 
 spec_expansion(F/A, M, QM, NF/A) :-
     atom(F),
-    integer(A),
+    integer(A), A >= 0, % TODO:[JF] static compile-time error otherwise?
     functor(G,F,A),
     atom_expansion(G, F, A, M, QM, NG, _),
     functor(NG,NF,A).
@@ -292,6 +317,15 @@ pred_expansion(P, N, M, QM, Mode, 'PAEnv'(P,PA)) :-
     mexpand__missing_args(P, N, M, H, G),
     atom_expansion_add_goals(G, M, QM, Mode, NG, no, no),
     copy_term('PA'(P,H,NG),PA). % rename vars
+
+pred_expansion_pa(Hh, B, N, M, QM, Mode, 'PAEnv'(ShVs,PA)) :-
+    head_and_shvs(Hh, H, ShVs),
+    check_pred(H, N, {Hh :- B}),
+    body_expansion(B, M, QM, Mode, NB),
+    ( nonvar(ShVs), ShVs = -(_) -> % negative sharing (requires fsyntaxplus package)
+        PA = 'PA'(ShVs,H,NB) % (do not rename vars)
+    ; copy_term('PA'(ShVs,H,NB),PA) % rename vars
+    ).
 
 % Given P (arity A), create G (arity A+N) and H goal (arity N), where
 % H contains the N missing arguments, equivalent to the following
@@ -323,12 +357,6 @@ mexpand__missing_args(P, N, _M, H, G) :-
     A1 is A+1,
     mexpand__unify_args(1, N, H, A1, G).
 
-pred_expansion_pa(Hh, B, N, M, QM, Mode, 'PAEnv'(ShVs,PA)) :-
-    head_and_shvs(Hh, H, ShVs),
-    check_pred(H, N, {Hh :- B}),
-    body_expansion(B, M, QM, Mode, NB),
-    copy_term('PA'(ShVs,H,NB),PA). % rename vars
-
 head_and_shvs((ShVs-> H), H, ShVs) :- !.
 head_and_shvs(H, H, []).
 
@@ -354,8 +382,7 @@ mexpand__unify_args(I, N, F, A, G) :-
 runtime_module_expansion(G,_Type, retract,_Primitive,_M,_QM, X, X, G) :- !.
 runtime_module_expansion(G,_Type,_Mode,_Primitive,_M,_QM, X, X, G) :-
     ciaopp_expansion, !. % no runtime exp.
-runtime_module_expansion('basiccontrol:,'(P, R),
-                     Type,_Mode, Primitive, M, QM, X, NX, R) :- !,
+runtime_module_expansion('basiccontrol:,'(P, R), Type,_Mode, Primitive, M, QM, X, NX, R) :- !,
     % This predicate is defined diff. in compiler.pl and builtin.pl
     uses_runtime_module_expansion,
     P = 'internals:rt_module_exp'(X, Type, M, QM, Primitive, NX).

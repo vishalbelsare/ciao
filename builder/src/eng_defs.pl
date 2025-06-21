@@ -7,7 +7,7 @@
 
 :- doc(module, "
 
-This module defines engine specifications for @emph{engine}
+This module defines engine specifications for @em{engine}
 builds. Engines are defined using the @lib{emugen} package. Engine
 build specifications contains parameters that affects the compiled
 engine:
@@ -85,7 +85,7 @@ src/*.c
 % ===========================================================================
 
 :- export(eng_cfg/2).
-% Identifier for this build (platform + debug)
+% Identifier for this build (platform + debug_level)
 eng_cfg(Eng) := EngCfg :-
     EngOpts = ~eng_opts(Eng),
     ( member(boot, EngOpts) ->
@@ -100,6 +100,18 @@ eng_cfg(Eng) := EngCfg :-
       DebugLevel = ~debug_level,
       ( DebugLevel = 'nodebug' -> EngCfg = OSArch
       ; EngCfg = ~atom_concat([OSArch, '-', DebugLevel])
+      )
+    ).
+
+:- export(eng_dbg/2).
+% Suffix for debug_level
+eng_dbg(Eng) := EngDbg :-
+    EngOpts = ~eng_opts(Eng),
+    ( member(boot, EngOpts) ->
+        EngDbg = '' % (special case, see 'boot_eng_cfg' in builder_boot.sh)
+    ; DebugLevel = ~debug_level,
+      ( DebugLevel = 'nodebug' -> EngDbg = ''
+      ; EngDbg = ~atom_concat('-', DebugLevel)
       )
     ).
 
@@ -226,7 +238,7 @@ eng_bin(lib_a, M, _Eng, objdir, ext(~get_a_ext), ~atom_concat('lib', M)).
 % Extension for the engine executable
 eng_ext(Eng, EngExt) :-
     EngOpts = ~eng_opts(Eng),
-    ( member(cross('LINUX', 'x86_JS'), EngOpts) ->
+    ( member(cross('EMSCRIPTEN', _Arch), EngOpts) ->
         EngExt = ext('.js')
     ; EngExt = exec
     ).
@@ -257,8 +269,10 @@ active_eng_name(D, Eng) := Name :-
     EngMainMod = ~eng_mainmod(Eng),
     ( D = exec ->         % E.g., ciaoengine.<OSARCH>
         Name0 = ~atom_concat([EngMainMod, '.', ~eng_cfg(Eng)])
-    ; D = exec_anyarch -> % E.g., ciaoengine
-        Name0 = EngMainMod
+    ; D = exec_anyarch -> % E.g., ciaoengine[-debug_level]
+        % Name0 = EngMainMod
+        % Note: add debug_level so that there can coexists several builds
+        Name0 = ~atom_concat(EngMainMod, ~eng_dbg(Eng))
     ; fail
     ),
     EngExt = ~eng_ext(Eng),

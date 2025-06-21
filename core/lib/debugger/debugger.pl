@@ -18,36 +18,37 @@
 :- doc(author, "Manuel C. Rodriguez").
 :- doc(author, "Edison Mera").
 :- doc(author, "Jose F. Morales").
+:- doc(author, "Manuel Hermenegildo").
+% Minor in documentation.  
 
 :- doc(module, "This library implements predicates which are normally
    used in the interactive top-level shell to debug programs. A subset
    of them are available in the embeddable debugger.").
 
-:- doc(bug, "Add an option to the emacs menu to automatically select
-   all modules in a project.").
-:- doc(bug, "Consider the possibility to show debugging messages
-   directly in the source code emacs buffer.").
+:- doc(bug, "Add an option to the Emacs menu to automatically
+   (de)select all modules in a project.").
 
 :- reexport(library(debugger/debugger_lib), [
-    breakpt/6,
-    current_debugged/1,
-    debug/0,
     debug_module/1,
     debug_module_source/1,
-    debugging/0,
-    get_debugger_state/1,
-    leash/1,
-    list_breakpt/0,
-    maxdepth/1,
-    nobreakall/0,
-    nobreakpt/6,
-    nodebug/0,
     nodebug_module/1,
+    debug/0,
+    nodebug/0,
+    trace/0,
+    notrace/0,
+    maxdepth/1,
+    spy/1,
     nospy/1,
     nospyall/0,
-    notrace/0,
-    spy/1,
-    trace/0]).
+    debugging/0,
+    leash/1,
+    breakpt/6,
+    list_breakpt/0,
+    nobreakpt/6,
+    nobreakall/0,
+    current_debugged/1,
+    get_debugger_state/1
+    ]).
 :- reexport(library(debugger/debugger_lib), [
     debugrtc/0,
     nodebugrtc/0,
@@ -56,11 +57,35 @@
 :- use_module(engine(debugger_support)).
 :- use_module(library(debugger/debugger_lib), [
     adjust_debugger_state/2,
-    in_debug_module/1,
+    in_debug_module/1, 
     no_debug_pred/1,
     debug_trace2/7,
     do_once_command/2,
     get_debugger_state/1]).
+
+% ---------------------------------------------------------------------------
+:- doc(doinclude,    debug_module/1).
+:- doc(doinclude,    debug_module_source/1).
+:- doc(doinclude,    nodebug_module/1).
+:- doc(doinclude,    debug/0).
+:- doc(doinclude,    nodebug/0).
+:- doc(doinclude,    trace/0).
+:- doc(doinclude,    notrace/0).
+:- doc(doinclude,    maxdepth/1).
+:- doc(doinclude,    spy/1).
+:- doc(doinclude,    nospy/1).
+:- doc(doinclude,    nospyall/0).
+:- doc(doinclude,    debugging/0).
+:- doc(doinclude,    leash/1).
+:- doc(doinclude,    breakpt/6).
+:- doc(doinclude,    list_breakpt/0).
+:- doc(doinclude,    nobreakpt/6).
+:- doc(doinclude,    nobreakall/0).
+:- doc(doinclude,    current_debugged/1).
+:- doc(doinclude,    get_debugger_state/1).
+
+% ---------------------------------------------------------------------------
+
 
 % ---------------------------------------------------------------------------
 %! # Enable/disable debugger context (called from toplevel.pl)
@@ -151,32 +176,36 @@ extract_info(Goal, Goal, nil, nil, nil, nil, d([], []), nil).
 :- use_module(library(format)).
 :- use_module(library(toplevel/toplevel_io)).
 
-:- doc(hide, do_interrupt_command/1).
-:- export(do_interrupt_command/1).
-do_interrupt_command(0'@) :- !, % @(command)
-    top_skipeol, do_once_command('| ?- ', d([], [], [])),
-    do_interrupt_command(0'\n).
-do_interrupt_command(0'a) :- !, % a(bort)
-    top_skipeol, abort.
-% do_interrupt_command(0'b) :- !, % b(reak)
-%       top_skipeol, break.
-do_interrupt_command(0'c) :- !, % c(ontinue)
-    top_skipeol.
-do_interrupt_command(0'd) :- !, % d(ebug)
-    top_skipeol, debug.
-do_interrupt_command(0'e) :- !, % e(xit)
-    top_skipeol, halt.
-do_interrupt_command(0't) :- !, % t(race)
-    top_skipeol, trace.
-do_interrupt_command(0'\n) :- !, % cr
+:- doc(hide, do_interrupt_command/0).
+:- export(do_interrupt_command/0).
+do_interrupt_command :-
     format(user, '~nCiao interruption (h for help)? ', []),
     top_flush,
-    top_get(C),
-    do_interrupt_command(C).
-do_interrupt_command(_) :- % h(elp) or other
-    top_skipeol,
+    top_get_line(Line),
+    ( Line = end_of_file -> true % continue
+    ; Line = [] -> do_interrupt_command
+    ; Line = [C|_],
+      do_interrupt_command_(C)
+    ).
+
+do_interrupt_command_(0'@) :- !, % @(command)
+    do_once_command('| ?- ', d([], [], [])),
+    do_interrupt_command.
+do_interrupt_command_(0'a) :- !, % a(bort)
+    abort.
+% do_interrupt_command_(0'b) :- !, % b(reak)
+%       break.
+do_interrupt_command_(0'c) :- !, % c(ontinue)
+    true.
+do_interrupt_command_(0'd) :- !, % d(ebug)
+    debug.
+do_interrupt_command_(0'e) :- !, % e(xit)
+    halt.
+do_interrupt_command_(0't) :- !, % t(race)
+    trace.
+do_interrupt_command_(_) :- % h(elp) or other
     interrupt_options,
-    do_interrupt_command(0'\n).
+    do_interrupt_command.
 
 interrupt_options :-
     top_nl,

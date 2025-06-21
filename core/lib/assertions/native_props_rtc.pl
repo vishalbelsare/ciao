@@ -76,6 +76,13 @@ maplist_varset([V|Vs],[Us|Uss]) :-
 
 % ----------------------------------------------------------------------
 
+% rtcheck version for native_props:clique/1
+% The clique-set is not taken into account because all variables in the set are 'top'.
+:- export(rtc_clique/1).
+rtc_clique(_X).
+
+% ----------------------------------------------------------------------
+
 :- use_module(library(write), [numbervars/3]).
 
 % TODO: It can be made more efficient (it is not strictly necessary to
@@ -121,11 +128,12 @@ rtc_det(Goal) :-
     ; anot_sol(Sols) % annotate solution
     ).
 
-:- export(rtc_fails/1). % rtc_impl for native_props:fails/1
+:- export(rtc_fails/1). % rtc_impl for basic_props:fails/1
 :- meta_predicate rtc_fails(goal).
 rtc_fails(Goal) :-
     call(Goal), % no_exception_(Goal, fails, _), % TODO: exceptions treated separately
-    send_comp_rtcheck(Goal, fails, nondet).
+    % NOTE: succeeds = multi+terminates (since we reached this point, we know 'terminates')
+    send_comp_rtcheck(Goal, fails, succeeds).
 
 :- export(rtc_semidet/1). % rtc_impl for native_props:semidet/1
 :- meta_predicate rtc_semidet(goal).
@@ -240,7 +248,7 @@ rtc_not_fails(Goal) :-
 % :- export(rtc_fails/1).
 % :- meta_predicate rtc_fails(goal).
 % 
-% % rtcheck version for native_props:fails/1
+% % rtcheck version for basic_props:fails/1
 % rtc_fails(Goal) :-
 %     Solved = solved(no),
 %     no_exception_(Goal, fails, _),
@@ -630,8 +638,8 @@ check_if_valid(>(Lin_Expr1, Lin_Expr2)) :-
     lin_expr(Lin_Expr2),
     Lin_Expr1 > Lin_Expr2.
 
-lin_expr(PPL_Var) :-
-    ppl_var(PPL_Var), !.
+lin_expr(X) :- % in the rt version variables should be instantiated
+    number(X), !.
 lin_expr(Coeff) :-
     coefficient(Coeff).
 lin_expr(+(Lin_Expr)) :-
@@ -651,12 +659,8 @@ lin_expr(*(Lin_Expr, Coeff)) :-
     coefficient(Coeff),
     lin_expr(Lin_Expr).
 
-ppl_var(Var) :-
-    var(Var).
-
 coefficient(Coeff) :-
-    ground(Coeff),
-    int(Coeff). % TODO: shouldn't it be a num/1?
+    integer(Coeff).
 
 % ===========================================================================
 :- doc(section, "Other properties").

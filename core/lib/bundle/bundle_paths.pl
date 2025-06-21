@@ -12,7 +12,7 @@
     [sourcename/1, absolute_file_name/7, fixed_absolute_file_name/3]).
 :- use_module(engine(internals),
     [ciao_root/1,
-     ciao_path/1,
+     ciao_wksp/2,
      '$bundle_id'/1,
      '$bundle_srcdir'/2]).
 :- use_module(library(system), [working_directory/2]).
@@ -74,15 +74,13 @@ relbuild(bootbuild, 'build-boot'). % bootstrap build
 % TODO: store dynamically the wksp and the relative srcdir?
 bundle_workspace(Bundle, Path) :-
     '$bundle_srcdir'(Bundle, Dir),
-    ( ciao_path(Path0)
-    ; ciao_root(Path0)
-    ),
-    % Dir is relative to Path0
-    ( Path0 = Dir
-    ; path_get_relative(Path0, Dir, _)
+    % (see builder_aux:lookup_workspace_/3)
+    ciao_wksp(Wksp, WkspBase),
+    ( WkspBase = Dir
+    ; path_get_relative(WkspBase, Dir, _)
     ),
     !, 
-    Path = Path0.
+    Path = Wksp.
 
 % ---------------------------------------------------------------------------
 

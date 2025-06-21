@@ -11,6 +11,43 @@ modules:
   - `ciaoengine.pl`: The main engine
   - `ciaoengine_doc.pl`: Documentation for `ciaoengine.pl`
 
+# Debugging the engine and enabling profiling
+
+The `debug_level` option enables building engines instrumented for
+profiling and internal debugging. This instrumentation is disabled in
+the default engine for performance reasons.
+
+Use `etc/build-eng-debug.sh` to build several engine versions with
+different `debug_level` options.
+
+You can select different engine versions and control their runtime
+options in the following way:
+
+ - Export `CIAODBG=<debug_level>` (where `<level>` is one of `debug`,
+   `profile-debug`, or `profile`)
+ - Use the `CIAORTOPTS` environment variable to pass engine options.
+   See `eng_debug.c` and `eng_profile.c` for different debugging and
+   profiling.
+
+Alternatively, you can execute the engine directly on with your compiled program:
+```
+$ <CIAOROOT>/build/eng/ciaoengine/objs/ciaoengine-<level> Args -C EngineOpts ... -b Exec
+```
+
+Example: execute `ciaopp` with profiling:
+```
+CIAODBG=profile CIAORTOPTS="--profile-calls --profile-roughtime" ciaopp -A guardians.pl
+```
+
+## Helper script to debug with lldb
+
+Example: rebuild engine in debug mode and start a `ciaosh` process
+```
+builder/etc/build-eng-debug.sh --rebuild all
+builder/etc/ciao-lldb "$(which ciaosh)"
+# the call 'run' from lldb
+```
+
 # Benchmarking
 
 Some engine performance benchmarks can be run (use the pipe for a
@@ -48,4 +85,13 @@ ciao oc:tests mtsys ciao2 2>&1 | grep -e "\(time\|name\)"
 ```
 rm -rf build/eng/ciaoengine; touch core/engine/absmach_def.pl; time ./ciao-boot.sh build --bin core.ciaobase # default
 rm -rf build/oc-cache; time ciao oc:build # optim-comp
+```
+
+# Promoting bootstrap
+
+```
+$ ./ciao-boot.sh build --bin core
+$ ./ciao-boot.sh boot-promote core.engine
+$ ciao oc:build-comp
+$ ciao oc:promote
 ```

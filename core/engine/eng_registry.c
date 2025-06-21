@@ -24,6 +24,7 @@
 #include <ciao/stream_basic.h>
 
 #include <ciao/eng_registry.h>
+#include <ciao/eng_profile.h>
 
 /* (only for registering) */
 #include <ciao/rune.h>
@@ -35,12 +36,20 @@
 #include <ciao/qread.h>
 #include <ciao/modload.h>
 
-#if defined(PROFILE)
-#define __USE_GNU
-# include <dlfcn.h>
-#endif
+/* ------------------------------------------------------------------------- */
+/* User-defined external configuration parameters */
 
-/* local declarations */
+intmach_t eng_cfg_getenv(char *name, intmach_t default_value) {
+  char *value_string;
+  value_string = getenv(name);
+  if (value_string != NULL) {
+    return atol(value_string);
+  } else {
+    return default_value;
+  }
+}
+
+/* ------------------------------------------------------------------------- */
 
 static CBOOL__PROTO(prolog_atom_mode);
 static definition_t *define_builtin(char *pname, int instr, int arity);
@@ -76,9 +85,9 @@ statistics_t ciao_stats = {
   0  /*inttime_t systemclockfreq*/
 };                                /* Shared */
 
-sw_on_key_node_t **atmtab; /* Shared --- but need lock when accessing /
+hashtab_node_t **atmtab; /* Shared --- but need lock when accessing /
                                    reallocing it! */
-sw_on_key_t *ciao_atoms;  /* Shared -- need lock when adding atoms */
+hashtab_t *ciao_atoms;  /* Shared -- need lock when adding atoms */
 static char                  /* Shared -- for adding new atoms; need lock */
   *prolog_chars=NULL,
   *prolog_chars_end=NULL;
@@ -86,45 +95,7 @@ static char                  /* Shared -- for adding new atoms; need lock */
 void *builtintab[64];                                           /* Shared */
 
                 /* Shared -- related with the hashing of arith. functions */
-sw_on_key_t *switch_on_function;
-
-/* GLOBAL DATA STRUCTURES */
-bool_t stop_on_pred_calls     = FALSE;        /* profile or trace -- Shared */
-bool_t trace_calls            = FALSE;   /* trace predicate calls -- Shared */
-#if defined(DEBUG)
-bool_t trace_instr            = FALSE;      /* trace instructions -- Shared */
-bool_t debug_gc               = FALSE;/* debug garbage collection -- Shared */
-bool_t debug_threads          = FALSE;   /* debug thread creation -- Shared */
-bool_t debug_choicepoints     = FALSE;/* debug choicepoints state -- Shared */
-bool_t debug_concchoicepoints = FALSE; /* debug conc. chpt. state -- Shared */
-bool_t debug_mem              = FALSE; /* debug memory manegement -- Shared */
-bool_t debug_conc             = FALSE;       /* debug concurrency -- Shared */
-bool_t debug_dynlink          = FALSE;    /* debugging C linking  -- Shared */
-#endif
-bool_t profile                = FALSE;       /* profile execution -- Shared */
-bool_t profile_eng            = FALSE;
-bool_t profile_rcc            = FALSE;
-
-#if defined(PROFILE)
-CVOID__PROTO(profile__hook_nop) {};
-CVOID__PROTO(profile__hook_call_nop, definition_t *f) {};
-#endif
-
-#if defined(PROFILE)
-/* TODO: add macro to define typedefs from prototypes, use ## */
-CVOID__PROTO((*profile__hook_fail)) = profile__hook_nop;
-CVOID__PROTO((*profile__hook_redo)) = profile__hook_nop;
-CVOID__PROTO((*profile__hook_cut)) = profile__hook_nop;
-CVOID__PROTO((*profile__hook_call), definition_t *f) = profile__hook_call_nop;
-#if defined(PROFILE__TRACER)
-CVOID__PROTO((*profile__hook_proceed)) = profile__hook_nop;
-CVOID__PROTO((*profile__hook_neck_proceed)) = profile__hook_nop;
-#endif
-#endif
-
-/* Shared? Not easy: they have to do with the lifetime of dyn. predicates  */
-instance_clock_t def_clock = 0;
-instance_clock_t use_clock = 0;
+hashtab_t *switch_on_function;
 
 /* tagged_t *heap_start , *heap_end, *heap_warn, *heap_warn_soft, stack_start,
    *stack_end, *stack_warn, tagged_choice_start, choice_start, choice_end,
@@ -133,11 +104,11 @@ instance_clock_t use_clock = 0;
 /* char *atom_buffer; */ /* Non shared */
 /* int atom_buffer_length; */ /* Non shared */
 
-sw_on_key_t  *prolog_predicates = NULL;                    /* Shared */
-sw_on_key_t **predicates_location = &prolog_predicates;    /* Shared */
+hashtab_t  *prolog_predicates = NULL;                    /* Shared */
+hashtab_t **predicates_location = &prolog_predicates;    /* Shared */
 
-sw_on_key_t  *prolog_modules = NULL;                    /* Shared */
-sw_on_key_t **modules_location = &prolog_modules;    /* Shared */
+hashtab_t  *prolog_modules = NULL;                    /* Shared */
+hashtab_t **modules_location = &prolog_modules;    /* Shared */
 
 #if defined(USE_THREADS) && defined(USE_POSIX_THREADS)
 pthread_attr_t detached_thread;
@@ -159,10 +130,7 @@ SLOCK    worker_id_pool_l;
    identifiers.  */
 SLOCK    atom_id_l;
 
-/* The creation of new streams should be atomic. */
-LOCK stream_list_l;
-
-bool_t wam_initialized = FALSE;
+bool_t in_abort_context = FALSE;
 
 /* Event Tracing Flags etc */
 
@@ -257,7 +225,7 @@ tagged_t atom_counter;           /* "counter" */
 #endif
 
 tagged_t functor_neck;
-tagged_t functor_list;
+tagged_t functor_lst;
 tagged_t functor_cut;
 tagged_t functor_minus;
 tagged_t functor_slash;
@@ -271,6 +239,7 @@ tagged_t functor_Dstream;
 tagged_t functor_Dlock;
 tagged_t functor_Dhandler;
 tagged_t functor_Dsetarg;
+tagged_t functor_Dsetargstr;
 tagged_t functor_large;
 tagged_t functor_long;
 
@@ -288,15 +257,11 @@ tagged_t current_unknown;
 tagged_t current_compiling;
 tagged_t current_ferror_flag;
 tagged_t current_quiet_flag;
-tagged_t current_gcmode;
-tagged_t current_gctrace;
-tagged_t current_gcmargin;
 /* tagged_t current_debugger_state; */ /* Now private */
 /* tagged_t current_debugger_mode;  */  /* Now private */
 tagged_t current_radix;
 
 try_node_t *address_nd_repeat;
-try_node_t *address_nd_current_instance;
 try_node_t *address_nd_current_atom;
 try_node_t *address_nd_current_predicate;
 try_node_t *address_nd_predicate_property;
@@ -319,6 +284,8 @@ tagged_t *tabling_stack_end;
 try_node_t *address_nd_suspension_point;
 bcp_t restart_point_insn;
 #endif
+
+try_node_t *address_nd_yield;
 
 definition_t *address_true;
 definition_t *address_fail;
@@ -362,26 +329,26 @@ definition_t *address_ucc;
 /*  MCL: there is an implicit assumption that the table is not full */
 
 #if defined(ABSMACH_OPT__atom_len)
-static sw_on_key_node_t *atom_gethash(sw_on_key_t *sw,
-                                      tagged_t key,
-                                      char *str,
-                                      uintmach_t str_len)
+static hashtab_node_t *atom_gethash(hashtab_t *sw,
+                                    tagged_t key,
+                                    char *str,
+                                    uintmach_t str_len)
 #else
-static sw_on_key_node_t *atom_gethash(sw_on_key_t *sw,
-                                      tagged_t key,
-                                      char *str)
+static hashtab_node_t *atom_gethash(hashtab_t *sw,
+                                    tagged_t key,
+                                    char *str)
 #endif
 {
-  sw_on_key_node_t *hnode;
+  hashtab_node_t *hnode;
 #if defined(ATOMGC)
-  sw_on_key_node_t *first_erased = NULL;
+  hashtab_node_t *first_erased = NULL;
 #endif
   intmach_t i;
   tagged_t t0;
 
   for (i=0, t0=key & sw->mask;
        ;
-       i+=sizeof(sw_on_key_node_t), t0=(t0+i) & sw->mask) {
+       i+=sizeof(hashtab_node_t), t0=(t0+i) & sw->mask) {
     hnode = SW_ON_KEY_NODE_FROM_OFFSET(sw, t0);
 #if !defined(ATOMGC)
     if ((hnode->key==key 
@@ -407,7 +374,7 @@ static sw_on_key_node_t *atom_gethash(sw_on_key_t *sw,
 }
 
 intmach_t lookup_atom_idx(char *str) {
-  sw_on_key_node_t *hnode;
+  hashtab_node_t *hnode;
   unsigned int hashcode = 0;
   intmach_t count, size;
   intmach_t current_mem = total_mem_count;
@@ -428,7 +395,7 @@ intmach_t lookup_atom_idx(char *str) {
                                    not 0 --- it cannot be 1, either, which is
                                    very important for atom GC */
 /*
-  while ((hnode=incore_gethash(ciao_atoms, (tagged_t)hashcode)) &&
+  while ((hnode=hashtab_get(ciao_atoms, (tagged_t)hashcode)) &&
          hnode->key==(tagged_t)hashcode &&
          strcmp(hnode->value.atomp->name, str)!=0)
     hashcode += 233509<<3;         233509 is prime, and so is
@@ -455,12 +422,12 @@ intmach_t lookup_atom_idx(char *str) {
 
   /* Check for a full table, and expand if needed */
 
-  if ((count+1)<<1 > (size=SwitchSize(ciao_atoms))) {
-    sw_on_key_t *new_table = new_switch_on_key(size<<1, NULL);
+  if ((count+1)<<1 > (size=HASHTAB_SIZE(ciao_atoms))) {
+    hashtab_t *new_table = new_switch_on_key(size<<1, NULL);
     intmach_t i;
-    sw_on_key_node_t *h1, *h2;
+    hashtab_node_t *h1, *h2;
 
-#if defined(ATOMGC) && defined(DEBUG)
+#if defined(ATOMGC) && defined(DEBUG_TRACE)
     /*printf("Reallocing atom table (count = %d)\n", count);*/
 #endif
 
@@ -495,7 +462,7 @@ intmach_t lookup_atom_idx(char *str) {
 #endif
     }
 
-    atmtab = checkrealloc_ARRAY(sw_on_key_node_t *,
+    atmtab = checkrealloc_ARRAY(hashtab_node_t *,
                                 count,
                                 2*count,
                                 (tagged_t *)atmtab);
@@ -506,8 +473,8 @@ intmach_t lookup_atom_idx(char *str) {
     new_table->next_index = count;
 #endif
 
-    checkdealloc_FLEXIBLE(sw_on_key_t,
-                          sw_on_key_node_t,
+    checkdealloc_FLEXIBLE(hashtab_t,
+                          hashtab_node_t,
                           size,
                           ciao_atoms);
     new_table->count = count;
@@ -585,7 +552,7 @@ void failc(char *mesg) {
       fprintf(stderr, "{ERROR: %s}\n", mesg);
     }
   }
-  if (!wam_initialized){
+  if (!in_abort_context){
     fprintf(stderr, "Wam not initialized, exiting!!!\n");
     engine_exit(-1);
   }
@@ -777,10 +744,7 @@ static CBOOL__PROTO(prolog_ciao_c_headers_dir)
   CBOOL__LASTUNIFY(X(0), atom_default_c_headers_dir);
 }
 
-static definition_t *define_builtin(char *pname,
-                                    int instr,
-                                    int arity)
-{
+static definition_t *define_builtin(char *pname, int instr, int arity) {
   definition_t *func;
   intmach_t current_mem = total_mem_count;
   
@@ -790,8 +754,7 @@ static definition_t *define_builtin(char *pname,
   return func;
 }
 
-static tagged_t deffunctor(char *pname, int arity)
-{
+tagged_t deffunctor(char *pname, int arity) {
   return SetArity(GET_ATOM(pname),arity);
 }
 
@@ -807,7 +770,7 @@ definition_t *define_c_mod_predicate(char *module,
                                      cbool0_t procedure)
 {
   definition_t *func;
-  sw_on_key_node_t *keyval;
+  hashtab_node_t *keyval;
   char mod_pname[STATICMAXATOM]; /* Pred. name with module name prepended */
   tagged_t mod_tagpname;    /* Def. of predicate with module name prepended */
   tagged_t key;
@@ -832,7 +795,7 @@ definition_t *define_c_mod_predicate(char *module,
 
   Wait_Acquire_slock(prolog_predicates_l);
 
-  keyval = (sw_on_key_node_t *)incore_gethash(prolog_predicates,key);
+  keyval = (hashtab_node_t *)hashtab_get(prolog_predicates,key);
 
   if (keyval->key)
     func = keyval->value.def;
@@ -874,7 +837,7 @@ void undefine_c_mod_predicate(char *module, char *pname, int arity) {
 module_t *define_c_static_mod(char *module_name)
 {
   module_t *mod;
-  sw_on_key_node_t *keyval;
+  hashtab_node_t *keyval;
   tagged_t mod_atm;    /* Def. of predicate with module name prepended */
   tagged_t key;
   intmach_t current_mem = total_mem_count;
@@ -884,7 +847,7 @@ module_t *define_c_static_mod(char *module_name)
 
   Wait_Acquire_slock(prolog_modules_l);
 
-  keyval = (sw_on_key_node_t *)incore_gethash(prolog_modules, key);
+  keyval = (hashtab_node_t *)hashtab_get(prolog_modules, key);
 
   if (keyval->key)
     mod = keyval->value.mod;
@@ -911,7 +874,7 @@ static void deffunction(char *atom,
                         int funcno)
 {
   tagged_t k = deffunctor(atom,arity);
-  sw_on_key_node_t *node = incore_gethash(switch_on_function,k);
+  hashtab_node_t *node = hashtab_get(switch_on_function,k);
 
   node->key = k;
   node->value.proc = builtintab[funcno] = (void *)proc;
@@ -922,23 +885,38 @@ static void deffunction_nobtin(char *atom,
                                void *proc)
 {
   tagged_t k = deffunctor(atom,arity);
-  sw_on_key_node_t *node = incore_gethash(switch_on_function,k);
+  hashtab_node_t *node = hashtab_get(switch_on_function,k);
 
   node->key = k;
   node->value.proc = proc;
 }
 
+/* --------------------------------------------------------------------------- */
+
+CBOOL__PROTO(module_is_static) {
+  DEREF(X(0),X(0));
+  if (!TaggedIsATM(X(0)))
+    return FALSE;
+
+  module_t *d = insert_module(modules_location,X(0),FALSE);
+  if (d==NULL) return FALSE;
+
+  return d->properties.is_static;
+}
+
+CBOOL__PROTO(set_currmod);
+
+/* --------------------------------------------------------------------------- */
 /* Initializations that need to be made once only. */
 
 void init_locks(void){
 #if defined(USE_THREADS)
   Init_slock(prolog_predicates_l);
   Init_slock(prolog_modules_l);
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
   Init_slock(ops_counter_l);
 #endif
 
-  Init_lock(stream_list_l);
   Init_slock(mem_mng_l);
   Init_slock(worker_id_pool_l);
   Init_slock(atom_id_l);
@@ -962,29 +940,6 @@ void init_locks(void){
 #endif
 }
 
-#if defined(PROFILE)
-void init_profiler(void) {
-  if (profile_eng) {
-    void (*profile_init)(void) =
-      (void (*)(void))dlsym(RTLD_DEFAULT, "profile_init");
-    void (*profile_enter_call_)(void) =
-      (void (*)(void))dlsym(RTLD_DEFAULT, "profile_enter_call_");
-    profile_rcc = TRUE;
-    if (profile_init) profile_init();
-    if (profile_enter_call_) profile_enter_call_();
-  }
-}
-
-void end_profiler(void) {
-  if (profile_eng) {
-    void (*profile__stop_exit_)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "profile__stop_exit");
-    void (*profile_dump_)(FILE *) = (void (*)(FILE *))dlsym(RTLD_DEFAULT, "profile_dump");
-    if (profile__stop_exit_) profile__stop_exit_();
-    if (profile_dump_) profile_dump_(stdout);
-  }
-}
-#endif
-
 extern char *ciaoroot_directory;
 extern char *c_headers_directory;
 
@@ -995,6 +950,13 @@ tagged_t atm_var, atm_attv, atm_float, atm_int, atm_str, atm_atm, atm_lst;
 /* bc_aux.h */
 CBOOL__PROTO(metachoice);
 CBOOL__PROTO(metacut);
+CBOOL__PROTO(prolog_repeat);
+CBOOL__PROTO(nd_repeat);
+#if defined(TABLING)
+CBOOL__PROTO(nd_fake_choicept);
+#endif
+CBOOL__PROTO(prolog_yield);
+CBOOL__PROTO(nd_yield);
 /* term_basic.c */
 CBOOL__PROTO(prolog_copy_term);
 CBOOL__PROTO(prolog_copy_term_nat);
@@ -1022,7 +984,7 @@ CBOOL__PROTO(prolog_show_nodes);
 CBOOL__PROTO(prolog_show_all_nodes);
 CBOOL__PROTO(start_node);
 /* stream_basic.c */
-CBOOL__PROTO(prolog_bootversion);
+CBOOL__PROTO(prolog_print_emulator_version);
 CBOOL__PROTO(prolog_force_interactive);
 CBOOL__PROTO(prolog_sourcepath);
 CBOOL__PROTO(prolog_open);
@@ -1038,10 +1000,11 @@ CBOOL__PROTO(prolog_stream_code);
 CBOOL__PROTO(character_count);
 CBOOL__PROTO(line_position);
 CBOOL__PROTO(line_count);
-CBOOL__PROTO(current_stream);
-/* io_basic.c */
 CBOOL__PROTO(flush_output);
 CBOOL__PROTO(flush_output1);
+CBOOL__PROTO(prolog_clearerr);
+CBOOL__PROTO(current_stream);
+/* io_basic.c */
 CBOOL__PROTO(code_class);
 CBOOL__PROTO(rune_class);
 CBOOL__PROTO(getct);
@@ -1074,12 +1037,13 @@ CBOOL__PROTO(prolog_display);
 CBOOL__PROTO(prolog_display2);
 CBOOL__PROTO(prolog_displayq);
 CBOOL__PROTO(prolog_displayq2);
-CBOOL__PROTO(prolog_clearerr);
 CBOOL__PROTO(prolog_fast_read_in_c);
 CBOOL__PROTO(prolog_fast_write_in_c);
 CBOOL__PROTO(prolog_format_print_float);
 CBOOL__PROTO(prolog_format_print_integer);
 CBOOL__PROTO(raw_copy_stdout);
+CBOOL__PROTO(prolog_set_unbuf);
+CBOOL__PROTO(prolog_input_wait);
 /* arithmetic.c */
 CBOOL__PROTO(bu2_numeq, tagged_t x0, tagged_t x1);
 CBOOL__PROTO(bu2_numge, tagged_t x0, tagged_t x1);
@@ -1121,6 +1085,10 @@ CFUN__PROTO(fu1_sqrt, tagged_t, tagged_t x0);
 CFUN__PROTO(fu1_sin, tagged_t, tagged_t x0);
 CFUN__PROTO(fu1_cos, tagged_t, tagged_t x0);
 CFUN__PROTO(fu1_atan, tagged_t, tagged_t x0);
+CBOOL__PROTO(prolog_lsb);
+CBOOL__PROTO(prolog_msb);
+CBOOL__PROTO(prolog_popcount);
+CBOOL__PROTO(prolog_getbit);
 /* term_compare.c */
 CBOOL__PROTO(bu2_lexeq, tagged_t x0, tagged_t x1);
 CBOOL__PROTO(bu2_lexge, tagged_t x0, tagged_t x1);
@@ -1183,15 +1151,14 @@ CBOOL__PROTO(prolog_eng_self);
 CBOOL__PROTO(prolog_lock_atom);
 CBOOL__PROTO(prolog_unlock_atom);
 CBOOL__PROTO(prolog_lock_atom_state);
-CBOOL__PROTO(prolog_unlock_predicate);
+CBOOL__PROTO(prolog_unlock_predicate_x);
 /* system.c */
 CBOOL__PROTO(prolog_using_windows);
 CBOOL__PROTO(prolog_exec);
 CBOOL__PROTO(prolog_wait);
 CBOOL__PROTO(prolog_kill);
 CBOOL__PROTO(prolog_unix_cd);
-CBOOL__PROTO(prolog_unix_shell0);
-CBOOL__PROTO(prolog_unix_shell2);
+CBOOL__PROTO(prolog_exec_shell);
 CBOOL__PROTO(prolog_fd_dup);
 CBOOL__PROTO(prolog_fd_close);
 CBOOL__PROTO(prolog_unix_argv);
@@ -1244,7 +1211,7 @@ CBOOL__PROTO(prolog_get_foreign_opts_ld);
 CBOOL__PROTO(prolog_get_foreign_opts_ccshared);
 CBOOL__PROTO(prolog_get_foreign_opts_ldshared);
 CBOOL__PROTO(prolog_current_executable);
-CBOOL__PROTO(prolog_time);
+CBOOL__PROTO(prolog_now);
 CBOOL__PROTO(prolog_datime);
 /* timing.c */
 CBOOL__PROTO(prolog_runtime);
@@ -1314,21 +1281,8 @@ static void define_functions(void)
   deffunction("COMPARE FUNCTION",2,(void *)fu2_compare,42);
 }
 
-/* The ...STKSIZE constants may be overridden by env. variables.
-   This macro first looks for one, and if not found, uses the default. */
-#define GETENV(VALUE,WORK,STRING,VAR) \
-  if ((WORK = getenv(STRING))) \
-    VALUE = atoi(WORK); \
-  else \
-    VALUE = VAR;
-
-void init_once(void)
-{
-  int i;
-#if defined(ATOMGC)
-  int j;
-#endif
-  char *cp;
+void init_once(void) {
+  intmach_t i;
 
   /* Init time variables */
   reset_timing();
@@ -1337,14 +1291,15 @@ void init_once(void)
   INIT_THREADS;
 #endif
 
-  GETENV(i,cp,"ATMTABSIZE",ATMTABSIZE);
-  atmtab = checkalloc_ARRAY(sw_on_key_node_t *, i);
+  i = eng_cfg_getenv("ATMTABSIZE",ATMTABSIZE);
+  atmtab = checkalloc_ARRAY(hashtab_node_t *, i);
 
   ciao_atoms = new_switch_on_key(2*i,NULL);
 
 #if defined(ATOMGC)
-  for (j=0; j < i; j++)
+  for (intmach_t j=0; j < i; j++) {
     atmtab[j] = NULL;
+  }
 #endif
 
   /* Predicate and module database initialization */
@@ -1456,9 +1411,7 @@ void init_once(void)
   atom_default_ciaoroot = GET_ATOM(ciaoroot_directory);
   atom_default_c_headers_dir = GET_ATOM(c_headers_directory);
 
-  current_gcmode = atom_on;
-  current_gctrace = atom_off;
-  current_gcmargin = MakeSmall(500); /* Quintus has 1024 */
+  init_gc();
   current_unknown = atom_error;
 /*   current_leash_mode = MakeSmall(0xf); */
 /*   current_maxdepth = MakeSmall(100000); */
@@ -1470,7 +1423,7 @@ void init_once(void)
   init_streams();
 
   functor_neck = deffunctor(":-",2);
-  functor_list = deffunctor(".",2);
+  functor_lst = deffunctor(".",2);
   functor_cut = deffunctor("!",0);
   functor_minus = deffunctor("-",2);
   functor_slash = deffunctor("/",2);
@@ -1484,6 +1437,7 @@ void init_once(void)
   functor_Dlock = deffunctor("$lock",2);
   functor_Dhandler = deffunctor("$goal_info",1);
   functor_Dsetarg = deffunctor("internals:$setarg",4);
+  functor_Dsetargstr = deffunctor("$$$setargstr$$$",1); // (users should not create this!)
   functor_large = deffunctor("large",2);
   functor_long = deffunctor("long",1);
 
@@ -1532,7 +1486,7 @@ void init_once(void)
   
   define_c_mod_predicate("internals","$force_interactive",0,prolog_force_interactive);
   define_c_mod_predicate("stream_basic","stream_code",2,prolog_stream_code);
-  define_c_mod_predicate("internals","$bootversion",0,prolog_bootversion);
+  define_c_mod_predicate("internals","$bootversion",0,prolog_print_emulator_version);
   define_c_mod_predicate("internals","$open",3,prolog_open);
   define_c_mod_predicate("stream_basic","close",1,prolog_close); 
   define_c_mod_predicate("stream_basic","character_count",2,character_count);
@@ -1543,6 +1497,9 @@ void init_once(void)
   define_c_mod_predicate("stream_basic","current_output",1,prolog_current_output);
   define_c_mod_predicate("stream_basic","set_output",1,prolog_set_output);
   define_c_mod_predicate("stream_basic","pipe",2,prolog_pipe);
+  define_c_mod_predicate("stream_basic","flush_output",0,flush_output);
+  define_c_mod_predicate("stream_basic","flush_output",1,flush_output1);
+  define_c_mod_predicate("stream_basic","clearerr",1,prolog_clearerr);
 
   define_c_mod_predicate("io_alias_redirection", "replace_stream",2, prolog_replace_stream);
   define_c_mod_predicate("io_alias_redirection", "get_stream",2, prolog_get_stream);
@@ -1584,9 +1541,9 @@ void init_once(void)
 
                                 /* internals.c */
   define_c_mod_predicate("internals","$abolish",1,prolog_abolish); 
+  define_c_mod_predicate("internals","$abolish_multifile",2,prolog_abolish_multifile); 
   define_c_mod_predicate("internals","$define_predicate",2,define_predicate);
   define_c_mod_predicate("internals","$erase_clause",1,erase_clause);
-  define_c_mod_predicate("internals","$clause_number",2,clause_number);
   define_c_mod_predicate("internals","$compiled_clause",4,compiled_clause);
   define_c_mod_predicate("internals","$empty_gcdef_bin",0,empty_gcdef_bin);
   define_c_mod_predicate("internals","$set_property",2,set_property);
@@ -1616,8 +1573,6 @@ void init_once(void)
   /* io_basic.c */
   
   define_c_mod_predicate("io_basic","code_class",2,code_class);
-  define_c_mod_predicate("stream_basic","flush_output",0,flush_output);
-  define_c_mod_predicate("stream_basic","flush_output",1,flush_output1);
   address_getct = define_c_mod_predicate("io_basic","getct",2,getct);
   address_getct1 = define_c_mod_predicate("io_basic","getct1",2,getct1);
   address_get = define_c_mod_predicate("io_basic","get_code",1,get);
@@ -1648,20 +1603,32 @@ void init_once(void)
   define_c_mod_predicate("io_basic","display",2,prolog_display2);
   define_c_mod_predicate("io_basic","displayq",1,prolog_displayq);
   define_c_mod_predicate("io_basic","displayq",2,prolog_displayq2);
-  define_c_mod_predicate("stream_basic","clearerr",1,prolog_clearerr);
   define_c_mod_predicate("fastrw","fast_read",1,prolog_fast_read_in_c);
   define_c_mod_predicate("fastrw","fast_write",1,prolog_fast_write_in_c);
   define_c_mod_predicate("compressed_bytecode","copyLZ",1,raw_copy_stdout); /* TODO: remove on next bootstrap promotion */
   define_c_mod_predicate("io_basic","$raw_copy_stdout",1,raw_copy_stdout);
-  
-  define_c_mod_predicate("internals","$format_print_float",3,prolog_format_print_float);
-  define_c_mod_predicate("internals","$format_print_integer",3,prolog_format_print_integer);
+  define_c_mod_predicate("io_basic","$set_unbuf",1,prolog_set_unbuf);
+  define_c_mod_predicate("io_basic","$input_wait",3,prolog_input_wait);
+  define_c_mod_predicate("io_basic","$format_print_float",3,prolog_format_print_float);
+  define_c_mod_predicate("io_basic","$format_print_integer",3,prolog_format_print_integer);
+  define_c_mod_predicate("internals","$format_print_float",3,prolog_format_print_float); /* TODO: remove on next bootstrap promotion */
+  define_c_mod_predicate("internals","$format_print_integer",3,prolog_format_print_integer); /* TODO: remove on next bootstrap promotion */
 
                                 /* bc_aux.h */
   
   define_c_mod_predicate("basiccontrol","$metachoice",1,metachoice);
   define_c_mod_predicate("basiccontrol","$metacut",1,metacut);
+
+                                /* eng_debug.h */
+  
   define_c_mod_predicate("internals","$ddt",1,set_trace_calls);
+
+                                /* eng_profile.h */
+  
+  define_c_mod_predicate("internals","$profile_flags_get",1,prolog_profile_flags_get);
+  define_c_mod_predicate("internals","$profile_flags_set",1,prolog_profile_flags_set);
+  define_c_mod_predicate("internals","$profile_dump",0,prolog_profile_dump);
+  define_c_mod_predicate("internals","$profile_reset",0,prolog_profile_reset);
 
                                 /* qread.c */
 
@@ -1680,8 +1647,7 @@ void init_once(void)
   define_c_mod_predicate("system","using_windows",0,prolog_using_windows);
   define_c_mod_predicate("system","working_directory",2,prolog_unix_cd);
   define_c_mod_predicate("system","pause", 1, prolog_pause);
-  define_c_mod_predicate("system","shell",0,prolog_unix_shell0);
-  define_c_mod_predicate("system","shell",2,prolog_unix_shell2);
+  define_c_mod_predicate("system","$exec_shell",2,prolog_exec_shell);
   define_c_mod_predicate("system","fd_dup",2,prolog_fd_dup);
   define_c_mod_predicate("system","fd_close",1,prolog_fd_close);
   define_c_mod_predicate("internals","$exec",9,prolog_exec);
@@ -1738,7 +1704,7 @@ void init_once(void)
 
   define_c_mod_predicate("system","current_executable",1, prolog_current_executable);
 
-  define_c_mod_predicate("system","time",1,prolog_time);
+  define_c_mod_predicate("system","now",1,prolog_now);
   define_c_mod_predicate("system","datime",9,prolog_datime);  
 
   /* modload.c */
@@ -1790,10 +1756,14 @@ void init_once(void)
   define_c_mod_predicate("internals","$predicate_property",3,predicate_property);
   define_c_mod_predicate("internals","$current_clauses",2,current_clauses);
   define_c_mod_predicate("internals","$module_is_static",1,module_is_static);
+  define_c_mod_predicate("internals","$set_currmod",1,set_currmod);
   define_c_mod_predicate("internals","$first_instance",2,first_instance);
   define_c_mod_predicate("internals","$close_predicate",1,close_predicate);
   define_c_mod_predicate("internals","$open_predicate",1,open_predicate);
   define_c_mod_predicate("runtime_control", "new_atom", 1, prolog_new_atom);
+  define_c_mod_predicate("internals","$max_arity",1,get_max_arity);
+  // (experimental)
+  define_c_mod_predicate("internals", "$yield", 0, prolog_yield);
 
 #if defined(GAUGE)
   /* gauge.c */
@@ -1809,6 +1779,12 @@ void init_once(void)
   define_c_mod_predicate("attr_rt","del_attr",2,del_attr__2);
 #endif
 
+  /* arithmetic.c */
+  define_c_mod_predicate("arithmetic","$lsb",2,prolog_lsb);
+  define_c_mod_predicate("arithmetic","$msb",2,prolog_msb);
+  define_c_mod_predicate("arithmetic","$popcount",2,prolog_popcount);
+  define_c_mod_predicate("arithmetic","$getbit",3,prolog_getbit);
+
   /* concurrency.c */
   define_c_mod_predicate("concurrency","$eng_call",6,prolog_eng_call);
   define_c_mod_predicate("concurrency","$eng_backtrack",2,prolog_eng_backtrack);
@@ -1822,7 +1798,7 @@ void init_once(void)
   define_c_mod_predicate("concurrency","lock_atom",1,prolog_lock_atom);
   define_c_mod_predicate("concurrency","unlock_atom",1,prolog_unlock_atom);
   define_c_mod_predicate("concurrency","atom_lock_state",2,prolog_lock_atom_state);
-  define_c_mod_predicate("internals","$unlock_predicate",1,prolog_unlock_predicate);
+  define_c_mod_predicate("internals","$unlock_predicate",1,prolog_unlock_predicate_x);
 
   address_nd_repeat = def_retry_c(nd_repeat,0);
   address_nd_current_atom = def_retry_c(nd_current_atom,2);
@@ -1842,18 +1818,13 @@ void init_once(void)
     EMIT_o(RESTART_POINT);
   }
 #endif
+  address_nd_yield = def_retry_c(nd_yield,0);
 
 #include "eng_static_mod.c"
 
 #if defined(MARKERS)
   init_markercode();
 #endif
-  
-#if defined(PROFILE)
-  init_profiler();
-#endif
-
-  /*init_worker_entry_table();*/
 }
 
 void compute_cwd(void);
@@ -1869,9 +1840,7 @@ void glb_init_each_time(void)
   compute_cwd();
 }
 
-CVOID__PROTO(local_init_each_time)
-{
-                
+CVOID__PROTO(local_init_each_time) {
   /* Debugger state globals moved to per-thread variables because of
      reallocations of the atoms they point to when expanding the heap
      --- this caused the program to break, since a C variable could be
@@ -1892,8 +1861,8 @@ CVOID__PROTO(local_init_each_time)
   Gc_Total_Grey = 0;
 
   /* Initialize some top registers */
-  Arg->heap_top = Heap_Start;
-  Arg->trail_top = Trail_Start;
+  w->heap_top = Heap_Start;
+  w->trail_top = Trail_Start;
 
 #if defined(USE_GLOBAL_VARS)
   /* Initialize heap region for global variables (make sure this is
@@ -1916,45 +1885,47 @@ CVOID__PROTO(local_init_each_time)
 #endif
 
   /* Setup initial frame */
-  Arg->frame = (frame_t *)Stack_Start;
-  Arg->local_top = (frame_t *)Offset(Arg->frame,EToY0);
-  Arg->frame->next_insn = NULL;   
-  Arg->frame->frame = NULL;
+  w->frame = (frame_t *)Stack_Start;
+  w->local_top = (frame_t *)Offset(w->frame,EToY0);
+  w->frame->next_insn = NULL;   
+  w->frame->frame = NULL;
 
   /* Setup initial choicepoint */
-  choice_t *b = InitialNode;
-  Arg->choice = b;                            
-  b->frame = Arg->frame;
+  choice_t *b = InitialChoice;
+  w->choice = b;                            
+  b->frame = w->frame;
 
   b->next_alt = termcode;
 
-  b->local_top = Arg->local_top;
-  b->heap_top = Arg->heap_top;
-  b->trail_top = Arg->trail_top;
+  b->local_top = w->local_top;
+  b->heap_top = w->heap_top;
+  CHPTFLG(b->flags = 0);
+  b->trail_top = w->trail_top;
   b->next_insn = exitcode;
-  b->term[0] = atom_nil;
+  b->x[0] = atom_nil;
 
   ChoiceptMarkPure(b);
   ChoiceptMarkStatic(b);
   ChoiceptMarkNoCVA(b);
                                 
-  NewShadowregs(Arg->heap_top);
-  Arg->next_alt = NULL;
+  NewShadowregs(w->heap_top);
+  SetDeep();
 
-  Arg->value_trail = (int)InitialValueTrail;
+  VALUETRAIL__INIT;
   TopConcChpt = b; /* Initialize concurrent topmost choicepoint */
 
-  Arg->next_insn = bootcode;
+  w->next_insn = bootcode;
+  w->misc->exit_code = 0;
   Stop_This_Goal(Arg) = FALSE;
   UnsetEvent();
 
   w->liveinfo = NULL;
 
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
   if (debug_threads)
-    printf("%d (%d) Initializing WAM %x: node = %x, trail = %x, frame = %x\n",
-           (int)Thread_Id, (int)GET_INC_COUNTER, (int)Arg,
-           (int)b, (int)Arg->trail_top, (int)Arg->frame);
+    fprintf(stderr, "*** %" PRIdm " (%" PRIdm ") Initializing WAM %p: node = %p, trail = %p, frame = %p\n",
+            (intmach_t)Thread_Id, (intmach_t)GET_INC_COUNTER, Arg,
+            b, w->trail_top, w->frame);
 #endif
   init_streams_each_time(Arg);       /* set misc. variables, handle signals */
   control_c_normal(Arg);                               /* For threads also? */
@@ -1979,16 +1950,12 @@ CVOID__PROTO(init_streams_each_time)
 /* --------------------------------------------------------------------------- */
 /*  Allocation of principal WAM areas. */
 
-#if defined(Solaris) || defined(LINUX) || defined(DARWIN) || defined(BSD)
+#if defined(Solaris)||defined(LINUX)||defined(EMSCRIPTEN)||defined(DARWIN)||defined(BSD)
 #include <string.h>
 #else
 #include <memory.h>
 #endif
 #include <unistd.h>
-
- /* # bytes used by the Prolog program & database code.  Probably not
-    accurately measured (patched here and there) (MCL).  */
-intmach_t mem_prog_count = 0;                                     /* Shared */
 
  /* Number of predicates asserted */
 intmach_t num_of_predicates = 0;                                  /* Shared */
@@ -2110,10 +2077,8 @@ worker_t *create_wam_storage(void) {
   return w;
 }
 
-CVOID__PROTO(create_wam_areas)
-{
-  int i, j;
-  char *cp;
+CVOID__PROTO(create_wam_areas) {
+  intmach_t i, j;
 
   Atom_Buffer_Length = STATICMAXATOM;
   Atom_Buffer = checkalloc_ARRAY(char, Atom_Buffer_Length);
@@ -2178,24 +2143,23 @@ CVOID__PROTO(create_wam_areas)
 #endif
 
   /* heap pointer is first free cell, grows ++ */
-  GETENV(i,cp,"GLOBALSTKSIZE",GLOBALSTKSIZE);
-  Heap_Start = checkalloc_ARRAY(tagged_t, i);
-  Heap_End =  HeapOffset(Heap_Start,i);
+  i = eng_cfg_getenv("GLOBALSTKSIZE",GLOBALSTKSIZE) * sizeof(tagged_t);
+  Heap_Start = ALLOC_AREA(i);
+  Heap_End = (tagged_t *)HeapCharOffset(Heap_Start,i);
   UnsetEvent();
 
   /* stack pointer is first free cell, grows ++ */
-  GETENV(i,cp,"LOCALSTKSIZE",LOCALSTKSIZE);
-  Stack_Start  = checkalloc_ARRAY(tagged_t, i);
-  Stack_End =  StackOffset(Stack_Start,i);
-  Stack_Warn = StackOffset(Stack_End,-STACKPAD);
+  i = eng_cfg_getenv("LOCALSTKSIZE",LOCALSTKSIZE) * sizeof(tagged_t);
+  Stack_Start = ALLOC_AREA(i);
+  Stack_End = (tagged_t *)StackCharOffset(Stack_Start,i);
 
   /* trail pointer is first free cell, grows ++ */
   /* choice pointer is last busy cell, grows -- */
-  GETENV(i,cp,"CHOICESTKSIZE",CHOICESTKSIZE);
-  GETENV(j,cp,"TRAILSTKSIZE",TRAILSTKSIZE);
+  i = eng_cfg_getenv("CHOICESTKSIZE",CHOICESTKSIZE) * sizeof(tagged_t);
+  j = eng_cfg_getenv("TRAILSTKSIZE",TRAILSTKSIZE) * sizeof(tagged_t);
   i += j;
-  Choice_End = Trail_Start = checkalloc_ARRAY(tagged_t, i);
-  Choice_Start = Trail_End = TrailOffset(Trail_Start, i);
+  Choice_End = Trail_Start = ALLOC_AREA(i);
+  Choice_Start = Trail_End = (tagged_t *)TrailCharOffset(Trail_Start, i);
 #if defined(USE_TAGGED_CHOICE_START)
   /*  Do not touch the (tagged_t) type casting! Or the emulator will break! */
   Tagged_Choice_Start = (tagged_t *)((tagged_t)Choice_Start + TaggedZero);
@@ -2203,27 +2167,28 @@ CVOID__PROTO(create_wam_areas)
 }
 
 /* Cleanup after abort: shrink stacks to initial sizes. */
-CVOID__PROTO(reinitialize_wam_areas)
-{
-  int i, j;
-  char *cp;
+CVOID__PROTO(reinitialize_wam_areas) {
+  intmach_t i, j;
 
-  GETENV(i,cp,"GLOBALSTKSIZE",GLOBALSTKSIZE);
-  if ((j=HeapDifference(Heap_Start,Heap_End)) != i) {
-    Heap_Start = checkrealloc_ARRAY(tagged_t, j, i, Heap_Start);
-    Heap_End = HeapOffset(Heap_Start,i);
+  i = eng_cfg_getenv("GLOBALSTKSIZE",GLOBALSTKSIZE) * sizeof(tagged_t);
+  j = HeapCharSize();
+  if (j != i) {
+    Heap_Start = REALLOC_AREA(Heap_Start, j, i);
+    Heap_End = (tagged_t *)HeapCharOffset(Heap_Start, i);
   }
-  GETENV(i,cp,"LOCALSTKSIZE",LOCALSTKSIZE);
-  if ((j=StackDifference(Stack_Start,Stack_End)) != i) {
-    Stack_Start = checkrealloc_ARRAY(tagged_t, j, i, Stack_Start);
-    Stack_End = StackOffset(Stack_Start,i);
+  i = eng_cfg_getenv("LOCALSTKSIZE",LOCALSTKSIZE) * sizeof(tagged_t);
+  j = StackCharSize();
+  if (j != i) {
+    Stack_Start = REALLOC_AREA(Stack_Start, j, i);
+    Stack_End = (tagged_t *)StackCharOffset(Stack_Start, i);
   }
-  GETENV(i,cp,"CHOICESTKSIZE",CHOICESTKSIZE);
-  GETENV(j,cp,"TRAILSTKSIZE",TRAILSTKSIZE);
+  i = eng_cfg_getenv("CHOICESTKSIZE",CHOICESTKSIZE) * sizeof(tagged_t);
+  j = eng_cfg_getenv("TRAILSTKSIZE",TRAILSTKSIZE) * sizeof(tagged_t);
   i += j;
-  if ((j=TrailDifference(Trail_Start,Trail_End)) != i) {
-    Choice_End = Trail_Start = checkrealloc_ARRAY(tagged_t, j, i, Trail_Start);
-    Choice_Start = Trail_End = TrailOffset(Trail_Start,i);
+  j = TrailCharDifference(Trail_Start,Trail_End);
+  if (j != i) {
+    Choice_End = Trail_Start = REALLOC_AREA(Trail_Start, j, i);
+    Choice_Start = Trail_End = (tagged_t *)TrailCharOffset(Trail_Start,i);
 #if defined(USE_TAGGED_CHOICE_START)
     /*  Do not touch the (tagged_t) type casting! Or the emulator will break! */
     Tagged_Choice_Start = (tagged_t *)((tagged_t)Choice_Start + TaggedZero);
@@ -2241,8 +2206,6 @@ CVOID__PROTO(reinitialize_wam_areas)
   }
 
   UnsetEvent();
-
-  Stack_Warn = StackOffset(Stack_End,-STACKPAD);
 }
 
 /*static char *mem_start; */  /* beginning of our virtual memory -- Shared */
@@ -2251,7 +2214,7 @@ CVOID__PROTO(reinitialize_wam_areas)
 /*
 void mem_prog_reset(void) {
     mem_start = (char *)(&end);
-#if SMALLPTR_BASE
+#if SMALLPTR_BASE != 0
   if (mem_start < (char *)SMALLPTR_BASE)
     mem_start = (char *)SMALLPTR_BASE;
 #endif
@@ -2293,90 +2256,3 @@ CBOOL__PROTO(total_usage)
   CBOOL__LASTUNIFY(X(0),x);
 }
 
-
-CBOOL__PROTO(statistics)
-{
-  stream_node_t *s = Output_Stream_Ptr;
-  intmach_t used, free;
-  inttime_t runtick0;
-  inttime_t usertick0 = usertick();
-  inttime_t systemtick0 = systemtick();
-  inttime_t walltick0 = walltick();
-  frame_t *newa;
-
-  runtick0=usertick0;
-
-  StreamPrintf(s,
-             "memory used (total)    %10" PRIdm " bytes\n",
-             total_mem_count);
-  StreamPrintf(s, 
-             "   program space (including reserved for atoms): %" PRIdm " bytes\n", 
-             mem_prog_count);
-
-  StreamPrintf(s,
-             "   number of atoms and functor/predicate names: %" PRIdm "\n", 
-             ciao_atoms->count);
-  StreamPrintf(s,
-             "   number of predicate definitions: %" PRIdm "\n", 
-             num_of_predicates);
-
-  used = HeapCharDifference(Heap_Start,w->heap_top);
-  free = HeapCharDifference(w->heap_top,Heap_End);
-  StreamPrintf(s, 
-             "   global stack   %10" PRIdm " bytes:%" PRIdm " in use,%10" PRIdm " free\n",
-             used+free, used, free);
-
-  ComputeA(newa,w->choice);
-  used = StackCharDifference(Stack_Start,newa);
-  free = StackCharDifference(newa,Stack_End);
-  StreamPrintf(s,
-             "   local stack    %10" PRIdm " bytes:%10" PRIdm " in use,%10" PRIdm " free\n",
-             used+free, used, free);
-
-  used = TrailCharDifference(Trail_Start,w->trail_top);
-  free = TrailCharDifference(w->trail_top,w->choice)/2;
-  StreamPrintf(s,
-             "   trail stack    %10" PRIdm " bytes:%10" PRIdm " in use,%10" PRIdm " free\n",
-             used+free, used, free);
-
-  used = ChoiceCharDifference(Choice_Start,w->choice);
-  free = ChoiceCharDifference(w->choice,w->trail_top)/2;
-  StreamPrintf(s,
-             "   control stack  %10" PRIdm " bytes:%10" PRIdm " in use,%10" PRIdm " free\n\n",
-             used+free, used, free);
-
-  StreamPrintf(s,
-             " %10.6f sec. for %" PRIdm " global, %" PRIdm " local, and %" PRIdm " control space overflows\n",
-             ((flt64_t)ciao_stats.ss_tick)/RunClockFreq(ciao_stats),
-             ciao_stats.ss_global,
-             ciao_stats.ss_local, ciao_stats.ss_control);
-  StreamPrintf(s,
-             " %10.6f sec. for %" PRIdm " garbage collections which collected %" PRIdm " bytes\n\n",
-             ((flt64_t)ciao_stats.gc_tick)/RunClockFreq(ciao_stats),
-             ciao_stats.gc_count,
-             (intmach_t)(ciao_stats.gc_acc*sizeof(tagged_t)));
-
-  StreamPrintf(s,
-             " runtime:    %10.6f sec. %12" PRId64 " ticks at %12" PRId64 " Hz\n",
-             (flt64_t)(runtick0-ciao_stats.starttick)/RunClockFreq(ciao_stats),
-             runtick0-ciao_stats.starttick,
-             RunClockFreq(ciao_stats));
-  StreamPrintf(s,
-             " usertime:   %10.6f sec. %12" PRId64 " ticks at %12" PRId64 " Hz\n",
-             (flt64_t)(usertick0-ciao_stats.startusertick)/ciao_stats.userclockfreq,
-             usertick0-ciao_stats.startusertick,
-             ciao_stats.userclockfreq);
-  StreamPrintf(s,
-             " systemtime: %10.6f sec. %12" PRId64 " ticks at %12" PRId64 " Hz\n",
-             (flt64_t)(systemtick0-ciao_stats.startsystemtick)/ciao_stats.systemclockfreq,
-             systemtick0-ciao_stats.startsystemtick,
-             ciao_stats.systemclockfreq);
-
-  StreamPrintf(s,
-             " walltime:   %10.6f sec. %12" PRId64 " ticks at %12" PRId64 " Hz\n\n",
-             (flt64_t)(walltick0-ciao_stats.startwalltick)/ciao_stats.wallclockfreq,
-             walltick0-ciao_stats.startwalltick,
-             ciao_stats.wallclockfreq);
-
-  return TRUE;
-}

@@ -26,8 +26,6 @@
 '$builder_hook'(lib_force_build('library/clpr')). % See WARNING note above
 '$builder_hook'(lib('library')).
 '$builder_hook'(src('examples')).
-%
-'$builder_hook'(manual('ciao_internals', [main='doc/internals/SETTINGS.pl'])).
 
 % ---------------------------------------------------------------------------
 % ciaobase: the minimum part needed for @apl{ciao_builder} to compile
@@ -196,29 +194,36 @@ ciao_sysconf_sh := ~bundle_path(builder, 'sh_src/config-sysdep/ciao_sysconf').
 :- use_module(library(bundle/bundle_paths), [bundle_path/3]).
 
 '$builder_hook'(test) :- !,
-    runtests_dir(core, 'lib'),
-    runtests_dir(core, 'library'),
-    runtests_ciaotests_hook. % integration tests
+    % Runtests_dir fails after executing all tests in a directory,
+    % whenever one of the tests is detected to fail.
+    % This allows '$builder_hook'(test) to fail, and exit `ciao test core` with a non-zero errcode.
+    Dirs = [~bundle_path(core, 'lib')|Dirs1], runtests_dir(core, 'lib'),
+    Dirs1 = [~bundle_path(core, 'library')|Dirs0], runtests_dir(core, 'library'),
+    % TODO: allow failure (e.g. using status in ciaosh call) to catch failing tests in CI jobs
+    CoreTestsDir = ~bundle_path(core, 'tests'),
+    ( exists_and_compilable(CoreTestsDir) -> do_ciaotests(CoreTestsDir), Dirs0 = [CoreTestsDir] ; Dirs0 = [] ),
+    show_test_stats(Dirs).
 
 :- use_module(library(system), [working_directory/2]).
 :- use_module(ciaobld(ciaoc_aux), [
     exists_and_compilable/1,
     invoke_ciaosh_batch/1]).
 
-% Run Ciao integration tests
-runtests_ciaotests_hook :-
-    ( exists_and_compilable(~bundle_path(core, 'tests')) ->
-        do_ciaotests % TODO: missing cleaning code! (see below)
-    ; true
-    ).
-
-do_ciaotests :-
-    working_directory(ThisDir, ~bundle_path(core, 'tests')),
+do_ciaotests(CoreTestsDir) :-
+    % TODO: missing cleaning code! (see below)
+    working_directory(ThisDir, CoreTestsDir),
     invoke_ciaosh_batch([
       use_module(core_tests(run_tests), [run_tests/0]),
       run_tests:run_tests
     ]),
     working_directory(_, ThisDir).
+
+show_test_stats(Target) :-
+    normal_message("summary of tests", []),
+    invoke_ciaosh_batch([
+      use_module(library(unittest), [run_tests/3]),
+      run_tests(Target, [dir_rec, onlystats], [show_results])
+    ]).
 
 % TODO: Missing cleaning code! (incomplete)
 %       find . -name '*.po' -exec rm {} \;

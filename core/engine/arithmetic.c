@@ -58,7 +58,7 @@
 })
 #endif
 
-#if defined(Solaris) || defined(LINUX) || defined(DARWIN) || defined(Win32) || defined(BSD)
+#if defined(Solaris)||defined(LINUX)||defined(EMSCRIPTEN)||defined(DARWIN)||defined(Win32)||defined(BSD)
 # define aint(f) (f>=0.0 ? floor(f) : ceil(f))
 #endif
 
@@ -71,7 +71,7 @@ static inline bool_t float_is_finite(flt64_t f) {
 #define GetFiniteFloat(F, U, ArgNo) ({ \
   F = blob_to_flt64(U); \
   if (!float_is_finite(F)) { \
-    BUILTIN_ERROR(REPRESENTATION_ERROR(NAN_OR_INF_TO_INTEGER), U, ArgNo); \
+    BUILTIN_ERROR(ERR_representation_error(nan_or_inf_to_integer), U, ArgNo); \
   } \
 })
 
@@ -95,7 +95,7 @@ static CFUN__PROTO(evaluate, tagged_t, tagged_t v) {
 #if defined(OPTIM_COMP)
     void *proc = hashtab_get(switch_on_function,t_head_functor)->value.as_ptr;
 #else
-    void *proc = incore_gethash(switch_on_function,t_head_functor)->value.proc;
+    void *proc = hashtab_get(switch_on_function,t_head_functor)->value.proc;
 #endif
     if (proc==NULL) goto err;
     switch (Arity(t_head_functor)) {
@@ -122,15 +122,15 @@ static CFUN__PROTO(evaluate, tagged_t, tagged_t v) {
 /* --------------------------------------------------------------------------- */
 
 #define DerefCheckNonvar(U,ArgNo) \
-  DerefSw_HVAorCVAorSVA_Other((U), {BUILTIN_ERROR(INSTANTIATION_ERROR, (U), (ArgNo));}, {})
+  DerefSw_HVAorCVAorSVA_Other((U), {BUILTIN_ERROR(ERR_instantiation_error, (U), (ArgNo));}, {})
 
 #define CheckNumber(U,ArgNo) ({ \
   if (!IsNumber(U)) { \
-    BUILTIN_ERROR(TYPE_ERROR(EVALUABLE), (U), (ArgNo)); \
+    BUILTIN_ERROR(ERR_type_error(evaluable), (U), (ArgNo)); \
   } \
 })
 
-#if defined(OPTIM_COMP)
+// TODO:[oc-merge] unused?
 #define CheckInteger(U,ArgNo) ({ \
   if (!TaggedIsSmall(U)) { \
     __label__ noteval_; \
@@ -138,25 +138,13 @@ static CFUN__PROTO(evaluate, tagged_t, tagged_t v) {
     tagged_t hf = TaggedToHeadfunctor(U); \
     if (!FunctorIsBlob(hf)) { \
      noteval_: /* not(NUM STR) or STRStruct */ \
-      BUILTIN_ERROR(TYPE_ERROR(EVALUABLE), (U), (ArgNo)); \
+      BUILTIN_ERROR(ERR_type_error(evaluable), (U), (ArgNo)); \
     } \
     if (FunctorIsFloat(hf)) { /* STR(blob(float)) */ \
-      BUILTIN_ERROR(TYPE_ERROR(INTEGER), (U), (ArgNo)); \
+      BUILTIN_ERROR(ERR_type_error(integer), (U), (ArgNo)); \
     } \
   } \
 })
-#else
-#define CheckInteger(U,ArgNo) ({ \
-  if (!TaggedIsSmall(U)) { \
-    if (!TaggedIsLarge(U)) { \
-      BUILTIN_ERROR(TYPE_ERROR(EVALUABLE), (U), (ArgNo)); \
-    } \
-    if (LargeIsFloat(U)) { \
-      BUILTIN_ERROR(TYPE_ERROR(INTEGER), (U), (ArgNo)); \
-    } \
-  } \
-})
-#endif
 
 /* Evaluate U (if needed) and check that it has type DOM.
    Additional arguments are GC roots (if a heap overflow or GC is needed) */
@@ -198,22 +186,6 @@ static CFUN__PROTO(evaluate, tagged_t, tagged_t v) {
 }
 
 /* --------------------------------------------------------------------------- */
-
-#if defined(OPTIM_COMP)
-#define ENSURE_LIVEINFO \
-  RTCHECK({if (w->liveinfo == NULL) { PANIC_FAULT("null liveinfo"); }})
-#else
-#if defined(DEBUG)
-#define ENSURE_LIVEINFO ({ \
-  if (w->liveinfo == NULL) { PANIC_FAULT("null liveinfo"); } \
-})
-#else
-#define ENSURE_LIVEINFO
-#endif
-#endif
-
-/* Heap_Warn that considers LIVEINFO__HEAP */
-#define Heap_Warn_GC Heap_Warn_Pad(LIVEINFO__HEAP(w->liveinfo))
 
 #if defined(OPTIM_COMP)
 #if IntvalRequires64
@@ -426,7 +398,7 @@ CFUN__PROTO(flt64_to_blob_GC, tagged_t, flt64_t i) {
 //   ENSURE_LIVEINFO;
 //   h = G->heap_top;
 //   if (HeapCharDifference(h, Heap_End) < (intmach_t)LIVEINFO__HEAP(w->liveinfo)+3*sizeof(tagged_t)) {
-//     explicit_heap_overflow(Arg, LIVEINFO__HEAP(w->liveinfo)+3*sizeof(tagged_t), (short)LIVEINFO__ARITY(w->liveinfo));
+//     explicit_heap_overflow(Arg, 2*(LIVEINFO__HEAP(w->liveinfo)+3*sizeof(tagged_t)), (short)LIVEINFO__ARITY(w->liveinfo));
 //     h = G->heap_top;
 //   }
 //   G->heap_top = h+3;
@@ -826,14 +798,14 @@ CFUN__PROTO(fu2_idivide, tagged_t, tagged_t x0, tagged_t x1) {
 #if tagged__num_size == 32 /* Only needed for this case */
     if (GetSmall(u) == MakeSmall(-1) && GetSmall(t) == INT_MIN) goto nonsmall;
 #endif
-    if (u == TaggedZero) BUILTIN_ERROR(EVALUATION_ERROR(ZERO_DIVISOR), u, 1);
+    if (u == TaggedZero) BUILTIN_ERROR(ERR_evaluation_error(zero_divisor), u, 1);
     intval_t r = (intval_t)(t-TaggedZero)/(intval_t)(u-TaggedZero);
     if (!IntvalIsInSmiValRange(r)) goto nonsmall;//CFUN__LASTCALL(SmiVal1ToTagged_GC, r);
     CFUN__PROCEED(MakeSmall(r));
   }
 
  nonsmall:
-  if (u == TaggedZero) BUILTIN_ERROR(EVALUATION_ERROR(ZERO_DIVISOR), u, 1);
+  if (u == TaggedZero) BUILTIN_ERROR(ERR_evaluation_error(zero_divisor), u, 1);
   /*bn_quotient_wanted = TRUE;*/
   CFUN__LASTCALL(bn_call2,bn_quotient_remainder_quot_wanted,t,u);
 }
@@ -844,11 +816,11 @@ CFUN__PROTO(fu2_rem, tagged_t, tagged_t x0, tagged_t x1) {
   EvalArith2Sw(Integer, t, u, small, nonsmall);
 
  small:
-  if (u == TaggedZero) BUILTIN_ERROR(EVALUATION_ERROR(ZERO_DIVISOR), u, 1);  
+  if (u == TaggedZero) BUILTIN_ERROR(ERR_evaluation_error(zero_divisor), u, 1);  
   CFUN__PROCEED((intval_t)(t-TaggedZero)%(intval_t)(u-TaggedZero)+TaggedZero);
 
  nonsmall:
-  if (u == TaggedZero) BUILTIN_ERROR(EVALUATION_ERROR(ZERO_DIVISOR), u, 1);
+  if (u == TaggedZero) BUILTIN_ERROR(ERR_evaluation_error(zero_divisor), u, 1);
   /*bn_quotient_wanted = FALSE;*/
   CFUN__LASTCALL(bn_call2,bn_quotient_remainder_quot_not_wanted,t,u);
 }
@@ -863,7 +835,7 @@ CFUN__PROTO(fu2_mod, tagged_t, tagged_t x0, tagged_t x1) {
  small:
   {
     intval_t rem, denom;
-    if (u == TaggedZero) BUILTIN_ERROR(EVALUATION_ERROR(ZERO_DIVISOR), u, 1);
+    if (u == TaggedZero) BUILTIN_ERROR(ERR_evaluation_error(zero_divisor), u, 1);
     denom = (intval_t)(u-TaggedZero);
     rem = (intval_t)(t-TaggedZero)%denom;
     if ((denom > 0 && rem < 0) || (denom < 0 && rem > 0)) {
@@ -876,7 +848,7 @@ CFUN__PROTO(fu2_mod, tagged_t, tagged_t x0, tagged_t x1) {
  nonsmall:
   {
     tagged_t T_rem;
-    if (u == TaggedZero) BUILTIN_ERROR(EVALUATION_ERROR(ZERO_DIVISOR), u, 1);
+    if (u == TaggedZero) BUILTIN_ERROR(ERR_evaluation_error(zero_divisor), u, 1);
     /*bn_quotient_wanted = FALSE;*/
     PROT_GC(T_rem = CFUN__EVAL(bn_call2,bn_quotient_remainder_quot_not_wanted,t,u), u);
     if (T_rem != TaggedZero && CFUN__EVAL(fu1_sign,u) != CFUN__EVAL(fu1_sign,T_rem)) {
@@ -1113,7 +1085,7 @@ CFUN__PROTO(fu2_lsh, tagged_t, tagged_t x0, tagged_t x1) {
   } else {
     if (dist == INTMACH_MAX) {
       if (t == TaggedZero) CFUN__PROCEED(TaggedZero);
-      BUILTIN_ERROR(RESOURCE_ERROR(R_STACK), u, 2); 
+      BUILTIN_ERROR(ERR_resource_error(r_stack), u, 2); 
     }
     CFUN__LASTCALL(lsh_internal,t,dist);
   }
@@ -1129,7 +1101,7 @@ CFUN__PROTO(fu2_rsh, tagged_t, tagged_t x0, tagged_t x1) {
     dist = (dist == INTMACH_MIN) ? INTMACH_MAX : (-dist); /* saturated negation */
     if (dist == INTMACH_MAX) {
       if (t == TaggedZero) CFUN__PROCEED(TaggedZero);
-      BUILTIN_ERROR(RESOURCE_ERROR(R_STACK), u, 2); 
+      BUILTIN_ERROR(ERR_resource_error(r_stack), u, 2); 
     }
     CFUN__LASTCALL(lsh_internal,t,dist);
   } else {
@@ -1301,4 +1273,59 @@ CFUN__PROTO(fu1_atan, tagged_t, tagged_t x0) {
   tagged_t t=x0;
   EvalArith1(Number, t);
   CFUN__LASTCALL(flt64_to_blob_GC, atan(TaggedToFloat(t)));
+}
+
+/* --------------------------------------------------------------------------- */
+/* TODO:[JF] New arithmetic functions, integrated into is/2 ! */
+
+CBOOL__PROTO(prolog_lsb) {
+  ERR__FUNCTOR("arithmetic:$lsb", 2);
+  int r;
+  DEREF(X(0),X(0));
+  Sw_NUM_Large_Other(X(0), { goto small; }, { goto nonsmall; }, {});
+  ERROR_IN_ARG(X(0),1,ERR_type_error(integer));
+ small: r = intval_LSB(GetSmall(X(0))); goto ok;
+ nonsmall: r = bn_lsb(TaggedToBignum(X(0))); goto ok;
+ ok: CBOOL__LASTUNIFY(X(1), MakeSmall(r)); /* TODO:[JF] assume 'r' is small */
+}
+
+CBOOL__PROTO(prolog_msb) {
+  ERR__FUNCTOR("arithmetic:$msb", 2);
+  int r;
+  DEREF(X(0),X(0));
+  Sw_NUM_Large_Other(X(0), { goto small; }, { goto nonsmall; }, {});
+  ERROR_IN_ARG(X(0),1,ERR_type_error(integer));
+ small: r = intval_MSB(GetSmall(X(0))); goto ok;
+ nonsmall: r = bn_msb(TaggedToBignum(X(0))); goto ok;
+ ok: CBOOL__LASTUNIFY(X(1), MakeSmall(r)); /* TODO:[JF] assume 'r' is small */
+}
+
+CBOOL__PROTO(prolog_popcount) {
+  ERR__FUNCTOR("arithmetic:$popcount", 2);
+  int r;
+  DEREF(X(0),X(0));
+  Sw_NUM_Large_Other(X(0), { goto small; }, { goto nonsmall; }, {});
+  ERROR_IN_ARG(X(0),1,ERR_type_error(integer));
+ small: r = intval_POPCOUNT(GetSmall(X(0))); goto ok;
+ nonsmall: r = bn_popcount(TaggedToBignum(X(0))); goto ok;
+ ok: CBOOL__LASTUNIFY(X(1), MakeSmall(r)); /* TODO:[JF] assume 'r' is small */
+}
+
+// '$getbit'(V,I,R) :- R is (V>>I)/\1
+CBOOL__PROTO(prolog_getbit) {
+  ERR__FUNCTOR("arithmetic:$getbit", 3);
+  int r;
+  // TODO: use "EvalArith2(Integer, t, u);"
+  DEREF(X(1),X(1));
+  if (!TaggedIsSmall(X(1))) goto zero; // TODO: 0 if large, errors if not integer
+  int i = GetSmall(X(1));
+  if (i < 0) goto zero;
+  //
+  DEREF(X(0),X(0));
+  Sw_NUM_Large_Other(X(0), { goto small; }, { goto nonsmall; }, {});
+  ERROR_IN_ARG(X(0),1,ERR_type_error(integer));
+ small: r = (GetSmall(X(0)) >> i) & 1; goto ok;
+ nonsmall: r = bn_getbit(TaggedToBignum(X(0)), i); goto ok;
+ ok: CBOOL__LASTUNIFY(X(2), MakeSmall(r));
+ zero: CBOOL__LASTUNIFY(X(2), MakeSmall(0));
 }

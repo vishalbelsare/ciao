@@ -28,11 +28,10 @@
 % Internal module metadata
 :- if(defined(optim_comp)).
 :- else.
-:- multifile('$primitive_meta_predicate'/2).
-:- discontiguous('$primitive_meta_predicate'/2).
 :- multifile('$current_module'/1).
 :- dynamic('$current_module'/1).
 :- multifile('$ldlibs'/1).
+:- dynamic('$multifile'/3). % TODO:[oc-merge] new!
 :- multifile('$multifile'/3).
 :- multifile('$load_libs'/0).
 :- multifile('$meta_args'/2).

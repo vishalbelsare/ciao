@@ -97,7 +97,6 @@ etc/ciao-download-stats.sh
 @begin{verbatim}
 $ git format-patch HEAD^n # where n is the number of commits not in master
 @end{verbatim}
-   
    @item Alice: send the @tt{????-*.patch} files via email to Bob
    @item Bob: apply back the changes in the private repository with
    
@@ -117,6 +116,13 @@ $ ...
      there will be no unpushed changes to master and all new commits
      will be authored as Alice.
    @end{itemize}
+
+   @section{Merging github pull requests}
+
+   You can follow the same steps as in the previous section, just
+   obtaining the patches from this custom URL
+   @tt{https://github.com/ciao-lang/ciao/pull/NUMBER.patch}.
+
 ").
 
 % ===========================================================================
@@ -138,6 +144,7 @@ Options:
 Help:
 
   help             Show this message
+  guide            Show release guide information
 
 Commands for querying information:
 
@@ -159,6 +166,8 @@ Commands on the publishing repo:
   pull             Pull
   push             Push
   rebase -- [args] Rebase (with of rest args)
+  tag -- TAG       Set tag (also remotely)
+  deltag -- TAG    Delete tag (also remotely)
 
 If no Bundle is specified, it is automatically detected from the
 working directory (this assumes that we have an updated checkout).
@@ -201,7 +210,7 @@ main(Args) :-
     run_cmd(Cmd, Opts, Args2).
 main(_) :-
     message(error, [
-        'Invalid usage. See \'ciao publish help\'.']),
+        'Invalid usage. See \'ciao publish help\' or \'ciao publish guide\'.']),
     halt(1).
 
 parse_opts(['--id', Id|Args], Args2, [srcid(Id)|Opts]) :- !,
@@ -555,8 +564,7 @@ run_push_dstgit :-
     git_cmd_atwd(~dstgit, ['log', 'origin/master..master'], [stdout(string(Out))]),
     ( Out = "" -> % No pending commits
         lformat(['No remaining commits to push\n'])
-    ; git_cmd_atwd_q(~dstgit, ['push']),
-      after_push_help 
+    ; git_cmd_atwd_q(~dstgit, ['push'])
     ).
 
 %! ## Rebase
@@ -570,6 +578,33 @@ run_rebase_dstgit(Opts) :-
     ; Args = []
     ),
     git_cmd_atwd(~dstgit, ['rebase'|Args], []).
+
+%! ## Tag
+cmd_decl(tag).
+cmd_needs_check_repos(tag).
+cmd_run(tag, Opts) :- !, run_tag_dstgit(Opts).
+
+run_tag_dstgit(Opts) :-
+    ( member(restargs([Tag]), Opts) ->
+        lformat(['=> ', ~srcbundle, ': setting tag\n']),
+        git_cmd_atwd(~dstgit, ['tag', Tag], []),
+        git_cmd_atwd(~dstgit, ['push', 'origin', Tag], [])
+    ; lformat(['=> ', ~srcbundle, ': showing tag\n']),
+      git_cmd_atwd(~dstgit, ['describe', '--abbrev=0', '--tags'], [])
+    ).
+
+%! ## Del Tag
+cmd_decl(deltag).
+cmd_needs_check_repos(deltag).
+cmd_run(deltag, Opts) :- !, run_deltag_dstgit(Opts).
+
+run_deltag_dstgit(Opts) :-
+    lformat(['=> ', ~srcbundle, ': setting tag\n']),
+    ( member(restargs([Tag]), Opts) -> true
+    ; fail
+    ),
+    git_cmd_atwd(~dstgit, ['tag', '-d', Tag], []),
+    git_cmd_atwd(~dstgit, ['push', '--delete', 'origin', Tag], []).
 
 % ---------------------------------------------------------------------------
 %! # Help on next steps
@@ -594,30 +629,18 @@ after_commit_help :-
         'Use \'ciao publish rebase -- -i\' to rebase commits if needed.\n',
         'Use \'ciao publish push\' to send commits to remote.\n']).
 
-% Help after push
-% TODO: configure per bundle
-after_push_help :- ~srcbundle = ciao, !,
+cmd_decl(guide).
+cmd_needs_check_repos(guide).
+cmd_run(guide, _Opts) :- !, show_guide.
+
+show_guide :-
+     ~srcbundle = ciao, !,
     lformat([
         % ___________________________________________________________________________
         '\n',
-        'REMINDERS:\n',
-        '\n',
-        '  - Update website catalog (gen_catalog/0)\n',
-        '  - Check the status of github actions\n',
-        '  - Trigger build at https://github.com/ciao-lang/docker-ciao\n',
-        '    (Output: https://hub.docker.com/r/ciaolang/ciao/)\n',
-        '  - For new releases, remember to create and push tags:\n',
-        '    E.g.,\n',
-        '      cd ', ~path_dirname(~dstgit), '\n',
-        % TODO: instructions to delete local and remote tag
-        %   git tag -d vMAJOR.MINOR.PATCH
-        %   git push --delete origin vMAJOR.MINOR.PATCH
-        '      git tag vMAJOR.MINOR.PATCH\n',
-        '      git push origin vMAJOR.MINOR.PATCH\n',
-        '\n',
-        '  - Remember to change default_vers_bin=MAJOR.MINOR.PATCH in ciao-boot.sh\n',
+        'Read \'HowToReleaseCiao.md\' for Ciao release instructions\n',
         '\n']).
-after_push_help.
+show_guide.
 
 % ---------------------------------------------------------------------------
 %! # Patch a tree before publishing
@@ -628,7 +651,7 @@ patch_tree :-
 patch_tree_ :-
     % Patch github specific (depends on bundle)
     ( ~srcbundle = 'ciao' ->
-        rmfiles(['COPYRIGHT', 'LGPL', 'GPL']) % TODO: move?
+        rmfiles(['COPYRIGHT', 'LGPL', 'GPL', 'COPYING', 'COPYING.LESSER']) % (added somewhere else) TODO: move?
         % patch_readme,
         % patch_ci_scripts
     ; % Remove ACTIVATE mark
@@ -663,8 +686,11 @@ patch_tree_ :-
 patch_license :-
     bundle_path('builder', 'dist/licenses', Dir),
     License = ~srclicense,
-    ( License = 'LGPL' -> cpfile(~path_concat(Dir, 'LGPL'), 'LGPL')
-    ; License = 'GPL' ->  cpfile(~path_concat(Dir, 'GPL'), 'GPL')
+    ( License = 'LGPL' ->
+        cpfile(~path_concat(Dir, 'lgpl-3.0.txt'), 'COPYING.LESSER'),
+        cpfile(~path_concat(Dir, 'gpl-3.0.txt'), 'COPYING')
+    ; License = 'GPL' ->
+        cpfile(~path_concat(Dir, 'gpl-3.0.txt'), 'COPYING')
     ; true % none
     ).
 

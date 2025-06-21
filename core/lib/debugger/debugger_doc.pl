@@ -49,24 +49,27 @@ a wide choice of control and information options available during debugging
 interaction.
 
 @begin{note}
+
 @bf{Note}: While the debugger described herein can be used in a
 standalone way (i.e., from an operating system shell or terminal
-window) in the same way as other Prolog debuggers, the most convenient
-way of debugging Ciao programs is by using the programming environment
-(see @ref{Using Ciao inside GNU emacs}). This environment has many
-debugging-related facilities, including displaying the source code for
-the module(s) corresponding to the procedure being executed, and
-higlighting dynamically the code segments corresponding to the
-different execution steps.
+window) in the same way as classical Prolog debuggers, the most
+convenient way of debugging Ciao Prolog programs is within the
+programming environment(s) (e.g., @ref{Using Ciao inside GNU
+emacs}, the Playground, the Virtual Studio Code extension,
+etc.). These environments have many debugging-related facilities,
+including displaying the source code for the module(s) corresponding
+to the procedure being executed, and highlighting dynamically the code
+segments corresponding to the different execution steps.
+
 @end{note}
 
 @section{Marking modules and files for debugging in the top-level debugger}
 
 The Ciao debugger is module-based. This allows skipping during the
 debugging process all files (including system library files) except
-those in which a bug is suspected. This saves having to explictily and
+those in which a bug is suspected. This saves having to explicitly and
 repetitively skip predicates in unrelated files during the debugging
-process.  Also, there is an efficieny advantage: in order to be able
+process.  Also, there is an efficiency advantage: in order to be able
 to run the debugger on a module, it must be loaded in @index{debug
 (interpreted) mode}, which will execute slower than normal (compiled)
 modules.  Thus, it is interesting to compile in debug mode only those
@@ -92,11 +95,11 @@ command:
 @noindent which in addition instructs the debugger to keep track of
 the line numbers in the source file and to report them during
 debugging. This is most useful when running the top-level inside the
-@apl{emacs} editor since in that case the Ciao @concept{emacs mode}
-allows performing full @concept{source-level debugging} in each module
-marked as above, i.e., the source lines being executed will be
-highlighted dynamically during debugging in a window showing the
-source code of the module.
+IDEs (e.g., the @apl{emacs} editor, playground, VSC, etc.) since in
+that case the IDE allows performing full @concept{source-level
+debugging} in each module marked as above, i.e., the source lines
+being executed will be highlighted dynamically during debugging in a
+window showing the source code of the module.
 
 @cindex{user modules, debugging} Note that, since all files with no
 module declaration belong to the pseudo-module @tt{user}, the command
@@ -109,7 +112,7 @@ compatible between them, i.e., Ciao allows having some modules loaded with
 @pred{debug_module/1} and others with @pred{debug_module_source/1}. To
 change from one interpreted mode to the other mode it suffices to select
 the module with the new interpreted mode (debugger mode), using the
-appropiate command, and reload the module.
+appropriate command, and reload the module.
 
 The commands above perform in fact two related actions: first, they
 let the compiler know that if a file containing a module with this
@@ -219,15 +222,16 @@ beginning of the execution of a program can be done easily however by
 simply using the @tt{trace} package.
 
 Note that there is a particularly interesting way of using the
-@concept{embedded debugger}: if an @em{application} is run in a shell
-buffer which has been set with Ciao inferior mode (@key{M-x}
+@concept{embedded debugger} in the @apl{emacs} editor:
+if an @em{application} is run in a @em{shell buffer} (a buffer running
+an OS shell) which has been put in Ciao inferior mode' (by typing @key{M-x} 
 @tt{ciao-inferior-mode}) and this application starts emitting output
 from the embedded debugger (i.e., which contains the embedded debugger
 and is debugging its code) then the Ciao emacs mode will be able to
 follow these messages, for example tracking execution in the source
 level code. This also works if the application is written in a
 combination of languages, provided the parts written in Ciao are
-compiled with the embedded debugger package and is thus a covenient
+compiled with the embedded debugger package and is thus a convenient
 way of debugging multi-language applications. The only thing needed is
 to make sure that the output messages appear in a shell buffer that is
 in Ciao inferior mode.
@@ -273,11 +277,9 @@ about the program text.  This model provides a basis for the debugging
 mechanism in the interpreter, and enables the user to view the behaviour of
 the program in a consistent way. It also provides the basis for the
 visualization performed on the source level program when source level
-program when @concept{source-level debugging} is activated within
-@apl{emacs}.
+program when @concept{source-level debugging}. 
 
-
-Let us look at an example Prolog procedure:
+Consider the following Prolog procedure:
 
 @image{byrdbox}
 
@@ -364,8 +366,8 @@ This section explains the two formats of the message output by the debugger
 at a port. All trace messages are output to the terminal regardless of
 where the current output stream is directed (which allows tracing programs
 while they are performing file I/O). The basic format, which will be shown
-in traditional debug and in source-level debugging within Ciao @apl{emacs}
-mode, is as follows:
+in traditional debug and in source-level debugging within the
+Ciao @apl{emacs} mode and other environments, is as follows:
 
 @begin{verbatim}
 S  13  7  Call: T user:descendant(dani,_123) ?
@@ -402,9 +404,9 @@ The final @tt{?} is the prompt indicating that the debugger is waiting for
 user interaction. One of the option codes allowed (see below) can be input
 at this point.
 
-The second format, quite similar to the format explained above, is shown
-when using source-level debugging outside the Ciao @apl{emacs} mode, and it
-is as follows:
+The second format, quite similar to the format explained above, is
+shown when using source-level debugging outside the Ciao @apl{emacs}
+mode or other IDEs, and it is as follows:
 
 @begin{verbatim}
        In /home/mcarlos/ciao/foo.pl (5-9) descendant-1
@@ -418,9 +420,9 @@ name of the source file, the start and end lines where the literal can be
 found, the substring to search for between those lines and the number of
 substrings to locate. This information for locating the point on the source
 file is not shown when executing the source-level debugger from the Ciao
-@apl{emacs} mode.
+@apl{emacs} mode or other IDEs.
 
-Ports can be ``unleashed'' by calling the @pred{leash/1} predicate omiting
+Ports can be ``unleashed'' by calling the @pred{leash/1} predicate omitting
 that port in the argument. This means that the debugger will stop but user
 interaction is not possible for an unleashed port. Obviously, the @tt{?}
 prompt will not be shown in such messages, since the user has specified
@@ -440,23 +442,26 @@ creep option, only requires @key{RET}.
 The only option which really needs to be remembered is '@tt{h}'
 (followed by @key{RET}). This provides help in the form of the following
 list of available options.
+```
+Debugging options:
+<cr>    creep            c      creep
+ l      leap             s      skip
+ r      retry            r <i>  retry i
+ f      fail             f <i>  fail i
+ d <av> display av       p <av> print av
+ w <av> write av         a      abort
+ v      variables        v <N>  variable N
+ g      ancestors        g <n>  ancestors n
+ n      nodebug          =      debugging
+ +      spy this         -      nospy this
+ @      command          u      unify
+ <      reset printdepth < <n>  set printdepth
+ ^      reset subterm    ^ <n>  set subterm
+ ?      help             h      help
 
-@begin{verbatim}
-<cr>   creep            c      creep
- l     leap             s      skip
- r     retry            r <i>  retry i
- f     fail             f <i>  fail i
- d     display          p      print
- w     write            v <I>  variable(s)
- g     ancestors        g <n>  ancestors n
- n     nodebug          =      debugging
- +     spy this         -      nospy this
- a     abort            
- @@     command          u      unify
- <     reset printdepth < <n>  set printdepth
- ^     reset subterm    ^ <n>  set subterm
- ?     help             h      help
-@end{verbatim}
+Note: In d, p and w options, you can add
+  <a> to show attributes and <v> to show variables.
+```
 
 @begin{itemize}
 
@@ -531,20 +536,27 @@ does this by continuously failing until it reaches the right place.
 Unfortunately, as before, this process cannot be guaranteed.
 
 @item @tt{d}
-(@index{display})
+(@index{display} @index{attributes})
 
-displays the current goal using @tt{display/1}.  See @tt{w} below. 
+re-displays the current goal using @tt{display/1}.  See also @tt{w}
+and @tt{p} below.  If @tt{v} and/or @tt{a} are added after @tt{d} then
+also the values of variables and/or attributes are also printed, as in
+@tt{v} below. This is sticky, i.e., the values of variables and/or
+attributes continue to be printed at each step until the next @tt{d},
+@tt{p}, or @tt{w} command.
 
 @item @tt{p}
 (@index{print})
 
 re-prints the current goal using @tt{print/1}.  Nested structures will be
 printed to the specified @em{printdepth} (see below).
+@tt{v} and/or @tt{a} can be added as in @tt{d} above.
 
 @item @tt{w}
 (@index{write})
 
-writes the current goal on the terminal using @tt{write/1}. 
+re-writes the current goal on the terminal using @tt{write/1}.
+@tt{v} and/or @tt{a} can be added as in @tt{d} above.
 
 @item @tt{v}
 (@index{variables})
@@ -653,7 +665,7 @@ source-level debug mode) using the @pred{call_in_module/2} predicate.
 
 Note that this does not affect analysis or optimization issues, since it
 only works on modules which are loaded in debug mode or source-level debug
-mode, i.e. unoptimized.
+mode, i.e., unoptimized.
 
 @section{Acknowledgements (debugger)}
 

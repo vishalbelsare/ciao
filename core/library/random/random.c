@@ -29,7 +29,7 @@ void srandom(unsigned seed);
 #endif
 
 
-#if defined(LINUX) || defined(BSD)
+#if defined(LINUX)||defined(EMSCRIPTEN)||defined(BSD)
 #  define RANDOM_MAX RAND_MAX
 #else
 #  define RANDOM_MAX 2147483647
@@ -47,7 +47,7 @@ CBOOL__PROTO(prolog_random) {
   DEREF(X(0),X(0));
 
   if (!IsVar(X(0))) {
-    BUILTIN_ERROR(INSTANTIATION_ERROR,atom_nil,1);
+    BUILTIN_ERROR(ERR_instantiation_error,atom_nil,1);
   }
 
   CBOOL__LASTUNIFY(BoxFloat(RANDOM),X(0));
@@ -58,17 +58,17 @@ CBOOL__PROTO(prolog_random3)
   ERR__FUNCTOR("random:random", 3);
   DEREF(X(0),X(0));
   if (!IsNumber(X(0))) {
-    ERROR_IN_ARG(X(0),1,NUMBER);
+    ERROR_IN_ARG(X(0),1,ERR_type_error(number));
   }
 
   DEREF(X(1),X(1));
   if (!IsNumber(X(1))) {
-    ERROR_IN_ARG(X(1),1,NUMBER);
+    ERROR_IN_ARG(X(1),2,ERR_type_error(number));
   }
 
   DEREF(X(2),X(2));
   if (!IsVar(X(2))) {
-    BUILTIN_ERROR(INSTANTIATION_ERROR,atom_nil,3);
+    BUILTIN_ERROR(ERR_instantiation_error,atom_nil,3);
   }
 
   if (IsInteger(X(0)) && IsInteger(X(1))) {
@@ -96,7 +96,7 @@ CBOOL__PROTO(prolog_srandom) {
   } else if (IsInteger(X(0))) {
     srandom((int)GetSmall(X(0)));
   } else {
-    ERROR_IN_ARG(X(1),1,INTEGER);
+    ERROR_IN_ARG(X(1),1,ERR_type_error(integer));
   }
 
   return TRUE;

@@ -105,9 +105,9 @@ The @tt{install} command is undone with the @tt{uninstall} command.
 
 @section{Bootstrapping the build system}
 
-The @tt{ciao-boot.sh} (or @tt{ciao-boot.bat} in Windows) automatically
-bootstraps and invokes the Ciao build system. The process is described
-below.
+The @tt{ciao-boot.sh} (or @tt{ciao-boot.bat} in Windows) command
+automatically bootstraps and invokes the Ciao build system. The
+process is described below.
 
 Bootstrapping is the process that compiles the Ciao compiler and
 builder in an environment where no existing Ciao binary exists. We
@@ -178,11 +178,11 @@ help_mode('help_all_boot', all, boot).
 % ---------------------------------------------------------------------------
 
 :- use_module(ciaobld(messages_aux), [normal_message/2]).
-:- use_module(library(system_extra), [using_tty/0]).
+:- use_module(library(system_extra), [istty/1]).
 
 % Show a help message after the command (only when run from a TTY)
 post_message(Cmd) :-
-    ( using_tty ->
+    ( istty(0) ->
         show_post_message(Cmd)
     ; true
     ).
@@ -212,9 +212,11 @@ builder_error_message(unknown_target(Target)) :- !,
 "It does not correspond to a known bundle name, a path to a bundle, or a path~n"||
 "to a workspace containing bundles.~n"||
 "~n"||
-"Some possible reasons: the target is not reachable from CIAOROOT or CIAOPATH,~n"||
-"or it does not contain the ACTIVATE mark (for catalogues), or the bundle~n"||
-"sources are incomplete (no valid Manifest.pl?).", [Target]).
+"Some possible reasons:~n"||
+" - target unreachable from CIAOROOT or CIAOPATH~n"||
+" - (only for bundles in catalogues) the ACTIVATE mark is missing~n"||
+" - Manifest.pl file is invalid~n"||
+" - the bundle has not been configured or built~n", [Target]).
 builder_error_message(unknown_bundle(Bundle)) :- !,
     error_message("'~w' is not a known bundle.~n", [Bundle]).
 builder_error_message(unknown_cmd(Cmd)) :- !,

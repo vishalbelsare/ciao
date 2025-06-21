@@ -133,13 +133,29 @@ current_debugged(Ms) :- findall(M, current_fact(debug_mod(M)), Ms).
 
 :- export(debug_module/1).
 :- pred debug_module(Module) : atm(Module)
-   # "The debugger will take into acount module @var{Module} (assuming
-   it is loaded in interpreted mode).  When issuing this command at
-   the toplevel shell, the compiler is instructed also to set to
-   @em{interpret} the loading mode of files defining that module and
-   also to mark it as 'modified' so that (re)loading this file or a
-   main file that uses this module will force it to be reloaded for
-   source-level debugging.".
+
+   # "To debug the predicates in a module that module needs to be
+   marked for debugging and re-loaded to be compiled in debug mode.
+   This predicate marks module @var{Module} for debugging. This has
+   two effects: The debugger will mark the module so that when
+   predicates in this module are called the debugger is entered. In
+   addition, the module is marked specially so that when (re)loaded it
+   will be (re)compiled in debug mode. It also marks the module as
+   'modified' so that (re)loading this file or a main file that uses
+   this module will force it to actually be recompiled. Note that in
+   addition to marking it for debugging the module @em{needs to be
+   reloaded} after marking it, for all this to occur. In other words,
+   the proper sequence to debug module @tt{m} is:
+
+   @begin{itemize}
+   ?- debug_module(m).  % Mark module m for debugging.
+   ?- use_module(m).    % Load module m in debugging mode.
+   ?- trace.            % Turn debugger on in, e.g., tracing mode.
+   @end{itemize}
+
+   This allows selecting which parts of the program are being debugged
+   at the module level. It also allows having some modules loaded
+   compiled in debug mode and others in standard mode (faster).".
 
 debug_module(M) :- atom(M), !,
     ( current_fact(debug_mod(M)) ->
@@ -157,10 +173,13 @@ in_debug_module(G) :-
 
 :- export(nodebug_module/1).
 :- pred nodebug_module(Module) : atm(Module)
-   # "The debugger will not take into acount module @var{Module}.
-   When issuing this command at the toplevel shell, the compiler is
-   instructed also to set to @em{compile} the loading mode of files
-   defining that module.".
+
+   # "Unmark module @var{Module} for debugging.  The debugger will not
+   enter debug mode for module @var{Module}.  When issuing this
+   command at the toplevel shell, the compiler is instructed also to
+   set to @em{compile} the loading mode of the files defining that
+   module, i.e., the module will be compiled in standard mode if
+   reloaded.".
 
 nodebug_module(M) :- % If M is a var, nodebug for all
     retractall_fact(debug_mod(M)).
@@ -169,8 +188,8 @@ nodebug_module(M) :- % If M is a var, nodebug for all
 %% This entry point is only for documentation purposes.
 :- export(debug_module_source/1).
 :- pred debug_module_source(Module) : atm(Module)
-   # "The debugger will take into acount module @var{Module} (assuming
-   it is is loaded in source-level debug mode).  When issuing this
+   # "The debugger will take into account module @var{Module} (assuming
+   it is loaded in source-level debug mode).  When issuing this
    command at the toplevel shell, the compiler is instructed also to
    set to @em{interpret} the loading mode of files defining that
    module and also to mark it as 'modified' so that (re)loading this
@@ -395,7 +414,7 @@ functor_spec(Name, Name, 0, 255, _) :- % 255 is max. arity
    : atm * sourcename * int * int * int * int
    # "Set a @index{breakpoint} in file @var{Src} between lines
    @var{Ln0} and @var{Ln1} at the literal corresponding to the
-   @var{Number}'th occurence of (predicate) name @var{Pred}.  The pair
+   @var{Number}'th occurrence of (predicate) name @var{Pred}.  The pair
    @var{Ln0}-@var{Ln1} uniquely identifies a program clause and must
    correspond to the start and end line numbers for the clause. The
    rest of the arguments provide enough information to be able to
@@ -442,9 +461,9 @@ nobreakall :-
 
 :- export(list_breakpt/0).
 :- pred list_breakpt/0 # "Prints out the location of all
-    breakpoints. The location of the breakpoints is showed usual by
+    breakpoints. The location of the breakpoints is shown usually by
     referring to the source file, the lines between which the predicate
-    can be found, the predicate name and the number of occurrence of the
+    can be found, the predicate name and the number of occurrences of the
     predicate name of the literal.".
 
 list_breakpt:-
@@ -541,6 +560,7 @@ no_debug_mc('hiord_rt:').
 no_debug_mc('debugger_support:'). % TODO: for $stop_trace
 no_debug_mc('debugger:').
 :- endif.
+no_debug_mc('foreign_js_rt:'). % (ciaowasm)
 no_debug_mc('rtchecks_rt:').
 no_debug_mc('native_props_rtc:').
 
@@ -875,38 +895,29 @@ debugging_options :-
 get_command(Command) :-
     top_display(' ? '),
     top_flush,
-    top_get(C1),
-    get_rest_command(C1, Command).
+    top_get_line(Line),
+    parse_cmd(Line, Command).
 
-get_rest_command(0'\n, 0'\n) :- !.
-get_rest_command(C1, Command) :-
-    top_get(C2),
-    get_arg(C2, C1, Command).
+parse_cmd(end_of_file, Command) :- !, Command = 0'\n.
+parse_cmd([], Command) :- !, Command = 0'\n.
+parse_cmd([C|Cs], Command) :-
+    parse_cmd_(Cs, C, Command).
 
-get_arg(0'\n, C, C) :- !.
-get_arg(0' , C1, C) :- !,
-    top_get(C2),
-    get_arg(C2, C1, C).
-get_arg(C2, C1, [C1, Arg]) :-
-    C2 >= 0'0, C2 =< 0'9, !,
-    trd_digits(C2, 0, Arg).
-get_arg(C2, C1, [C1, Arg]) :-
-    trd_string(C2, Arg, "").
+parse_cmd_([], C, C) :- !.
+parse_cmd_([0' |Cs], C1, C) :- !, % skip blank
+    parse_cmd_(Cs, C1, C).
+parse_cmd_(Cs, C1, [C1, Arg]) :-
+    Cs = [C2|_], C2 >= 0'0, C2 =< 0'9, !, % digit
+    parse_digits(Cs, 0, Arg).
+parse_cmd_(Cs, C1, [C1, Cs]).
 
-trd_digits(Ch, SoFar, I) :-
+parse_digits([], I, I) :- !.
+parse_digits([Ch|Cs], SoFar, I) :-
     Ch >= 0'0, Ch =< 0'9, !,
     Next is SoFar*10 + Ch - 0'0,
-    top_get(Ch1),
-    trd_digits(Ch1, Next, I).
-trd_digits(0'\n, I, I) :- !.
-trd_digits(_, I, J) :-
-    top_get(Ch),
-    trd_digits(Ch, I, J).
-
-trd_string(0'\n, I,       I) :- !.
-trd_string(Ch,   [Ch|I0], I) :-
-    top_get(Ch1),
-    trd_string(Ch1, I0, I).
+    parse_digits(Cs, Next, I).
+parse_digits([_|Cs], I, J) :- % ignore nondigit
+    parse_digits(Cs, I, J).
 
 % ---------------------------------------------------------------------------
 %! ## Show ancestors command (g)
@@ -966,9 +977,12 @@ debug_call(Goal) :- '$shell_call'(Goal).
 % ---------------------------------------------------------------------------
 %! # Print options
 
-:- pred printopts(DefaultOption, Depth, Attribs, Vars).
+:- pred printopts(DefaultOption, Depth, Attrs, Vars).
+% Depth: printing depth
+% Attrs: print attributed variables
+% Vars: show source variable names
 :- data printopts/4.
-printopts(0'p, 10, true, true). % (initial options)
+printopts(0'p, 10, true, false). % (initial options)
 
 % Print depth
 :- export(printdepth/1).
@@ -994,11 +1008,20 @@ set_defaultopt(O, A, V) :-
     retract_fact(printopts(_, D, _, _)),
     assertz_fact(printopts(O, D, A, V)).
 
-proc_extraopts("",   false, false).
-proc_extraopts("a",  true,  false).
-proc_extraopts("av", true,  true).
-proc_extraopts("v",  false, true).
-proc_extraopts("va", true,  true).
+proc_extraopts(Opts, Attrs, Vars) :-
+    proc_extraopts_(Opts, Attrs, Vars),
+    % set defaults
+    ( var(Attrs) -> Attrs = false ; true ),
+    ( var(Vars) -> Vars = false ; true ).
+
+proc_extraopts_([], _, _).
+proc_extraopts_([C|Cs], Attrs, Vars) :-
+    proc_extraopts__(C, Attrs, Vars),
+    proc_extraopts_(Cs, Attrs, Vars).
+
+proc_extraopts__(0'a, true, _).
+proc_extraopts__(0'v, _, true). % TODO: actual goals, src vars later, is it better?
+proc_extraopts__(0'o, _, orig). % TODO: src vars in goals, deprecate?
 
 % ---------------------------------------------------------------------------
 %! # Print goal and bindings during debugging
@@ -1025,7 +1048,7 @@ do_write_goal(0'v, X, _, _, _, _, _, _, _, _, Dict, _) :- !,
 do_write_goal([0'v, SName], _, _, _, _, _, _, _, _, _, Dict, _) :- !,
     write_goal_v_name(SName, Dict).
 do_write_goal(T, X, Xs, B, D, Pport, Pred, Src, Ln0, Ln1, Dict, Number) :-
-    print_srcdbg_info(Pred, Src, Ln0, Ln1, Number),
+    print_srcdbg_info(Pport, Pred, Src, Ln0, Ln1, Number),
     spy_info(Xs, X, Mark0, S, []),
     ( Mark0 == '   ' -> break_info(Pred, Src, Ln0, Ln1, Number, Mark)
     ; Mark=Mark0
@@ -1072,19 +1095,31 @@ display_var(Name, Value0, Value, Op, WriteOpts) :-
         write_op(Op, Value, WriteOpts)
     ).
 
-write_goal2(Op, Goal0, d(_, _, ADict0), AtVars0) :-
+write_goal2(Op, Goal0, d(UDict0, CDict0, ADict0), AtVars0) :-
     current_fact(printopts(_, D, A, V)),
     sort(AtVars0, AtVars1),
     ( V == true ->
+        Goal = Goal0,
+        AtVars = AtVars1
+    ; V == orig ->
         apply_dict_with_cycles(t(ADict0,Goal0,AtVars1),ADict0,t(ADict,Goal,AtVars)),              
         foldl(sel_instantiated, ADict, AInst, [])
-    ; ADict = ADict0,
-      Goal = Goal0,
+    ; Goal = Goal0,
       AtVars = AtVars1
     ),
     get_write_options(A, AtVars, D, WriteOpts),
     write_op(Op, Goal, WriteOpts),
-    ( V == true -> maplist(display_nv(Op, WriteOpts), AInst) ; true ),
+    ( V == true ->
+        append(UDict0, CDict0, UCDict0),
+        % (only uninstantiated variables)
+%        filter(uninstantiated, UCDict0, DictUninst),
+%        maplist(display_ov(Op, WriteOpts), DictUninst)
+        % (all variables)
+        maplist(display_ov(Op, WriteOpts), UCDict0)
+    ; V == orig ->
+        maplist(display_nv(Op, WriteOpts), AInst)
+    ; true
+    ),
     ( A == true -> print_attributes(AtVars, Op, WriteOpts) ; true ).
 
 sel_instantiated(NameValue) --> {instantiated(NameValue)}, !, [NameValue].
@@ -1137,6 +1172,14 @@ display_nv(Op, WO, NameValue) :-
     display(','), nl,
     display_nv0(NameValue, Op, WO).
 
+display_ov0(Name=Value, Op, WO) :-
+    display_list(['\t   ', Name, ': ']),
+    write_op(Op, Value, WO).
+
+display_ov(Op, WO, NameValue) :-
+    nl,
+    display_ov0(NameValue, Op, WO).
+
 print_attributes(As, Op, WriteOpts) :-
     maplist(print_attribute(Op, WriteOpts), As).
 
@@ -1147,8 +1190,10 @@ print_attribute(Op, WriteOpts, A) :-
     write_op(Op, A, WriteOpts),
     display(']').
 
-print_srcdbg_info(_, _, nil, nil, nil) :- !.
-print_srcdbg_info(Pred, Src, Ln0, Ln1, Number) :-
+:- multifile print_srcdbg_info_hook/6.
+
+print_srcdbg_info(_, _, _, nil, nil, nil) :- !.
+print_srcdbg_info(Pport, Pred, Src, Ln0, Ln1, Number) :-
     ( using_windows -> % running in a Windows non-cygwin shell
         % Emacs understand slashes instead of backslashes, even on
         % Windows, and this saves problems with escaping
@@ -1156,21 +1201,22 @@ print_srcdbg_info(Pred, Src, Ln0, Ln1, Number) :-
         cyg2win_a(Src, ActualSrc, noswap)
     ; Src = ActualSrc
     ),
-    display_list([
+    ( print_srcdbg_info_hook(Pport, Pred, Src, Ln0, Ln1, Number) ->
+        true
+    ; display_list([
         '         In ', ActualSrc, ' (', Ln0, -, Ln1, ') ',
-        Pred, -, Number, '\n']).
+        Pred, -, Number, '\n'])
+    ).
 
 % ---------------------------------------------------------------------------
 %! ## Auxiliary for printing bindings (dicts, cycles, and attributed variables)
 % TODO: move/merge with prettysols.pl?
 % TODO: document
 
+:- use_module(library(cyclic_terms), [uncycle_term/2]). % TODO: slow, see attrdump.pl
 :- use_module(library(varnames/apply_dict)).
 :- use_module(library(varnames/complete_dict), [set_undefined_names/3]).
-:- use_module(library(cyclic_terms), [uncycle_term/2]). % TODO: slow, see attrdump.pl
-:- use_module(engine(term_basic), [cyclic_term/1]).
-:- use_module(engine(attributes)).
-:- use_module(engine(runtime_control), [current_prolog_flag/2]).
+:- use_module(engine(attributes), [get_attribute/2]).
 
 debug_dict(X, d(UDict, CDict), Dict) :-
     append(UDict, CDict, Dict0),
@@ -1252,4 +1298,5 @@ get_attributed_vars_args(N, X, At0, At2) :-
     get_attributed_vars_nc(A, At0, At1),
     N1 is N - 1,
     get_attributed_vars_args(N1, X, At1, At2).
+
 

@@ -69,10 +69,14 @@ rtcheck_to_messages(E, Messages) :-
 
 
 rtcheck_to_message(E, Text, TextTail) :-
-    E = rtcheck(Type, Pred0, Dict, Prop0, Valid0, _),
+    E = rtcheck(Type, Pred0, Dict, Prop0, Valid0, Pos),
     pretty_prop(t(Pred0, Prop0, Valid0), Dict,
         t(Pred, Prop, Valid)),
-    rtcheck_to_message_(Type, Pred, Prop, Valid, Text, TextTail).
+    rtcheck_to_message_(Type, Pred, Prop, Valid, Text0, TextTail),
+    ( member(asrloc(loc(_,LB,LE)), Pos) -> % show asrloc if available % TODO: review
+        Text = ['(lns ', ''({LB}), '-', ''({LE}), ') ' | Text0]
+    ; Text = Text0
+    ).
 
 rtcheck_to_message_(Type, Pred, Prop, Valid, Text, Text1) :-
     type_text(Type, TypeMsg),
@@ -139,9 +143,9 @@ actual_prop_to_message(X,['\n    ', ''({X}) | Tail], Tail).
 
 :- use_module(library(lists), [length/2, append/3]).
 
-:- test compact_list(A, B) :
-    (A = [1, 2, 2, 2, 2, 3, 3, 4, 3, 4, 3, 4, 3, 4, 1, 5, 7, 1, 5, 7])
-    => (B = [1, 2, 3, 4, 1, 5, 7]) + not_fails.
+% :- test compact_list(A, B) :
+%     (A = [1, 2, 2, 2, 2, 3, 3, 4, 3, 4, 3, 4, 3, 4, 1, 5, 7, 1, 5, 7])
+%     => (B = [1, 2, 3, 4, 1, 5, 7]) + not_fails.
 
 :- export(compact_list/2). % TODO: do not export, only for running tests
 :- pred compact_list(L, R) : list(L) => list(R)

@@ -261,9 +261,9 @@ build_eng_exec_header(Eng) :-
     display('#!/bin/sh\n'),
     display_list([
         'r=${CIAOROOT:-\"', FinalCiaoRoot, '\"}\n',
-        'e=\"$r/build/eng/', EngMainMod, '/objs/', EngMainMod, '\"${CIAOOS:+${CIAOARCH:+".$CIAOOS$CIAOARCH"}}\n',
+        'e=\"$r/build/eng/', EngMainMod, '/objs/', EngMainMod, '\"${CIAOOS:+${CIAOARCH:+".$CIAOOS$CIAOARCH"}}${CIAODBG:+-${CIAODBG}}\n',
         'e=${CIAOENGINE:-$e}\n',
-        'exec "$e" "$@" -C -b "$0"\n'
+        'exec "$e" "$@" -C ${CIAORTOPTS} -b "$0"\n'
     ]),
     put_code(0xC), % ^L control character
     display('\n'),
@@ -309,7 +309,7 @@ create_windows_bat(Eng, BatCmd, Opts, EngExecOpts, OrigBundle, OrigCmd) :-
 :- doc(section, "Batch compilation of sets of modules").
 
 :- use_module(library(source_tree), [current_file_find/3]).
-:- use_module(library(system_extra), [using_tty/0]).
+:- use_module(library(system_extra), [istty/1]).
 
 % TODO: cmd_build/1 can only build Prolog applications. Add plug-ins?
 %   Or rewrite the special applications in some that that
@@ -469,7 +469,7 @@ report_mode(Workers, repmode(Count,EraseLine)) :-
     ; MayCount = no
     ),
     % Erase lines when output is attached to a TTY
-    ( using_tty -> Count = MayCount, EraseLine = yes
+    ( istty(1) -> Count = MayCount, EraseLine = yes
     ; Count = no, EraseLine = no
     ).
 
@@ -511,21 +511,23 @@ take_n(I, [X|Xs], [X|As], Bs) :- I > 0,
 
 :- export(runtests_dir/2).
 % Call unittests on directory Dir (recursive) of bundle Bundle
+% Fails whenever a test failure is detected after executing all tests
 runtests_dir(Bundle, Dir) :-
     runtests_dir(Bundle, Dir, [rtc_entry]).
 
 :- export(runtests_dir/3).
 % Call unittests on directory Dir (recursive) of bundle Bundle
+% Fails whenever a test failure is detected after executing all tests
 runtests_dir(Bundle, Dir, Opts) :-
     AbsDir = ~bundle_path(Bundle, Dir),
     exists_and_compilable(AbsDir),
     !,
     normal_message("running tests at ~w/", [Dir]),
     invoke_ciaosh_batch([
-      use_module(library(unittest), [run_tests_in_dir_rec/2]),
-      run_tests_in_dir_rec(AbsDir, Opts)
-    ]).
-runtests_dir(_, _, _).
+      use_module(library(unittest), [run_tests_in_dir_rec/3]),
+      (run_tests_in_dir_rec(AbsDir, Opts, St), halt(St))
+    ], [status(S)]),
+    S = 0.
 
 :- use_module(library(system), [file_exists/1]).
 
@@ -542,7 +544,7 @@ exists_and_compilable(Dir) :-
 % NOTE: Most of these are "safe" implementations that are ensured to
 % work even if ciaosh or the engine are not working properly.
 
-:- use_module(ciaobld(builder_aux), [lookup_workspace/2]).
+:- use_module(ciaobld(builder_aux), [lookup_workspace/3]).
 :- use_module(engine(internals), [ciao_root/1]).
 :- use_module(library(sh_process), [sh_process_call/3]).
 :- use_module(engine(stream_basic), [fixed_absolute_file_name/3]).
@@ -575,8 +577,7 @@ clean_aux(Command, Args) :-
 % Ask prefix for out-of-tree builds (safe version). Dir must be an
 % absolute path name.
 cachedir_prefix(Dir, Prefix) :-
-    lookup_workspace(Dir, Wksp),
-    path_get_relative(Wksp, Dir, Rel), % Dir is relative to Wksp
+    lookup_workspace(Dir, Wksp, Rel),
     path_concat(Wksp, 'build/cache', CacheDir),
     atom_codes(Rel, RelCs),
     translate_base_2(RelCs, RelCs2),

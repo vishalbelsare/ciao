@@ -26,7 +26,7 @@
    predicate can be used as a function.
 
    The predicate associated with a function has the same name and one
-   more argument, meant as the place holder for the ``result'' of the
+   more argument, meant as the placeholder for the ``result'' of the
    function. In fact, this argument is just the one that will be
    syntactically connected to the surrounding goal or function, but it
    does not necessarily imply any directionality, i.e., it does not
@@ -58,21 +58,32 @@
    @section{Predefined evaluable functors} 
    @cindex{Predefined evaluable functors} 
 
-   By using the declaration
-   @tt{:- fun_eval arith(true)}, all the functors understood by
-   @pred{is/2} will be also evaluated.  This is active from the
-   declaration downwards until a @tt{:- fun_eval arith(false)}
-   declaration or the end of the module is reached.  Beware that
-   arithmetic functors are used in some cases for other purposes than
-   arithmetic: e.g. @tt{abolish(p/2)}.  But this is not so disturbing
-   as it may appear because this package is not active in
-   declarations, except for the goal-including declarations
-   @decl{initialization/1} and @decl{on_abort/1}.  Note that all the
-   declarations introduced by this package, as is customary in Ciao,
-   are local to the module where they are included.
+   By using the declaration @tt{:- fun_eval arith(true)}, all the
+   functors understood by @pred{is/2} will be also evaluated.  This is
+   active from the declaration downwards until a @tt{:- fun_eval
+   arith(false)} declaration or the end of the module is reached.
 
-   In addition to functors declared with the declaration
-   @pred{fun_eval/1}, the package defines as evaluable the functors used
+   Note that arithmetic functors are used in some cases for purposes
+   other than arithmetic, such as in, e.g., @tt{abolish(p/2)}.
+   However, this is not as much of a problem as as it may appear
+   because this package does not affect declarations, except for the
+   goal-including declarations @decl{initialization/1} and
+   @decl{on_abort/1}.  Note that all the declarations introduced by
+   this package, as is customary in Ciao, are local to the module in
+   which they are included.
+
+   @begin{alert}
+   @bf{Experimentally}, the @tt{arith} flag can be set to the
+   following values to enable constraint-based arithmetic:
+   @begin{itemize}
+   @item @tt{:- fun_eval arith(clpfd)}: finite domains (requires the @tt{clpfd} package)
+   @item @tt{:- fun_eval arith(clpq)}: CLP(Q) (requires the @tt{clpq} package)
+   @item @tt{:- fun_eval arith(clpr)}: CLP(R) (requires the @tt{clpr} package)
+   @end{itemize}
+   @end{alert}
+
+   In addition to functors declared with the @pred{fun_eval/1}
+   declaration, this package defines as evaluable the functors used
    for disjunctive and conditional expressions: @op{| /2} and
    @op{? /2} (defined as operators).  A disjunctive expression has the
    form @tt{(V1|V2)}, and its value when first evaluated is @tt{V1}, and
@@ -113,8 +124,8 @@ fact(N) := N * ~fact(--N) :- N > 0.
    Note that guards can often be defined more compactly using conditional
    expressions:
 @begin{verbatim}
-fact(N) := N = 0 ? 1
-     | N > 0 ? N * ~fact(--N).
+fact(N) := ( N = 0 ? 1
+           | N > 0 ? N * ~fact(--N) ).
 @end{verbatim}
    The declaration @tt{:- fun_eval defined(true)} allows to locally
    define as evaluable functions being defined, so that the @tt{~}
@@ -122,10 +133,8 @@ fact(N) := N = 0 ? 1
    the functor being defined. For example, for the @tt{fact} invocations
    in the previous definitions, which can now be written as, e.g. 
    (we provide the full module definition):
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/factf_fsyntax.pl}
-@end{verbatim}
 
+@includecode{fsyntax/examples/factf_fsyntax.pl}
 
 @noindent
    This behaviour is reverted using 
@@ -140,7 +149,7 @@ fact(N) := N = 0 ? 1
        compiler optimizations.
    @end{itemize}
 
-   Some implementation details and a discussion of the recent
+   Some implementation details and a discussion of the more recent 
    combination of this library (which dates from Ciao version 0.2)
    with the lazy evaluation library can be found in
    @cite{functional-lazy-notation-flops2006}.
@@ -180,24 +189,23 @@ pair(A,B) := ^(A-B).
    @cindex{Other functionality} 
 
    In addition to the basic package @file{fsyntax}, a package
-   @lib{functional} is also provided, to allow programming with a more
-   functional-flavored style.  That package activates the declarations
-   @tt{:- fun_eval arith(true)} and @tt{:- fun_eval defined(true)},
+   @lib{functional} is also provided, which basically
+   activates flags that are commonly assumed in functional
+   programming style.  In paticular, this package activates the 
+   @tt{:- fun_eval arith(true)} and @tt{:- fun_eval defined(true)}
+   declarations, 
    and defines the @op{. /2} operator for use in lists (but be
    careful: this period cannot be followed by a whitespace!) and the
    operator @op{++ /2} as a function for appending lists. The
    factorial example above can be written as follows using the
    @lib{functional} package:
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/factf.pl}
-@end{verbatim}
+
+@includecode{fsyntax/examples/factf.pl}
 
    @noindent
    Which is equivalent to:
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/factf_fsyntax.pl}
-@end{verbatim}
 
+@includecode{fsyntax/examples/factf_fsyntax.pl}
 
    See the end of this chapter for additional examples.
 
@@ -206,22 +214,34 @@ pair(A,B) := ^(A-B).
    Ciao provides in its standard library the @tt{hiord} package, which
    supports a form of higher-order untyped logic programming with
    predicate abstractions @cite{ciao-hiord-tr,daniel-phd,ciao-hiord}.
-   Predicate abstractions are Ciao's translation to logic programming
-   of the lambda expressions of functional programming: they define
-   unnamed predicates which will be ultimately executed by a
-   higher-order call, unifying its arguments appropriately. A function
-   abstraction is provided as functional syntactic sugar for predicate
-   abstractions:
+   Goal and predicate arguments in @tt{meta_predicate}s allow
+   @concept{predicate abstractions}, which are Ciao's translation to
+   logic programming of the lambda expressions of functional
+   programming: they define unnamed predicates which can be ultimately
+   executed by a higher-order call, unifying its arguments
+   appropriately.
 
-   Predicate abstraction: @tt{''(X,Y) :- p(X,Z), q(Z,Y)}.
+   The @tt{fsyntax} package together with the
+   @tt{:- fun_eval hiord(true)} enables enhanced support for higher order
+   predicates. First, it allows specifying higher-order terms using
+   the @tt{@{...@}} syntax in arbitrary term positions (fully
+   statically without delayed @em{meta-expansion}). Second, it allows
+   predicate abstractions with functional notation:
 
-   Function abstraction: @tt{''(X) := ~q(~p(X))}.
+   @begin{itemize}
+   @item Predicate abstraction: @tt{P = @{''(X,Y) :- p(X,Z), q(Z,Y)@}}.
+
+   @item Functional abstraction: @tt{P = @{''(X) := ~q(~p(X))@}}.
+   @end{itemize}
 
    @noindent
-   and function application is syntactic sugar over predicate application: 
+   and function application as syntactic sugar over predicate application: 
 
-   Predicate application: @tt{..., P(X,Y), ...}
-   Function application: @tt{..., Y = ~P(X), ...}
+   @begin{itemize}
+   @item Predicate application: @tt{..., P(X,Y), ...}
+
+   @item Functional application: @tt{..., Y = ~P(X), ...}
+   @end{itemize}
 
    The combination of this @tt{hiord} package with the @tt{fsyntax}
    and @tt{lazy} packages (and, optionally, the type inference and
@@ -231,10 +251,6 @@ pair(A,B) := ^(A-B).
    results can be obtained by deriving higher-order data from any
    other higher-order data (see @cite{daniel-phd}), as well as some of
    the functionality of full higher-order logic programming.
-
-   At this moment, it is necessary to specify the @tt{:- fun_eval
-   hiord(true)} option to enable correct handling of function
-   abstractions.
    ").
 
 %%  \item[Laziness:] Lazy evaluation is a program evaluation technique
@@ -325,9 +341,7 @@ der(x ** N, N * x ** N1) :-
   features.  For example, it provides compact and familiar notation
   for regular types and other properties:
 
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/propsf.pl}
-@end{verbatim}
+@includecode{fsyntax/examples/propsf.pl}
 
 @noindent
 where the functional clauses expand to (note the use of higher-order
@@ -385,9 +399,9 @@ a(@em{A21},..,@em{A2M}), ..., a(@em{AN1},...,} @tt{@em{ANM}))}, where
 simplicity arity limitations, solved in any case typically by further
 nesting with logarithmic access time). The following recursive
 definition defines the property @tt{fixed_array/2} and also the array
-access operator @tt{@@}:
+access predicate @tt{get_elem/3}:
 
-@begin{verbatim}
+```
 fixed_array([N|Ms],A):-
     functor(A,a,N),
     rows(N,Ms,A).
@@ -401,49 +415,49 @@ rows(N,Ms,A) :-
     array(Ms,Arg),
     rows(N-1,Ms,A).
 
-:- pred @@(Array,Index,Elem) :: array * list(int) * int
-   # \"@@var@{Elem@} is the @@var@{Index@}-th element of @@var@{Array@}.\".
+:- pred get_elem(Array,Index,Elem):: array * list(int) * int
+   # \"@var{Elem} is the @var{Index}-th element of @var{Array}.\".
 
-:- op(55, xfx, '@@').
-:- fun_eval (@@)/2.
-V@@[I]    := ~arg(I,V).       %% Or: V@@[] := V. 
-V@@[I|Js] := ~arg(I,V)@@Js.
-@end{verbatim}
+get_elem(V,[])     := V.
+get_elem(V,[I|Js]) := ~get_elem(~arg(I,V),Js).
+```
 
-This allows writing, e.g., @tt{M = fixed_array([2,2]), M@@[2,1] = 3}
-(which could also be expressed as @tt{fixed_array([2,2])@@[2,1] = 3}),
+Rather than using @tt{get_elem/3} directly, we will use @tt{:-
+push_prolog_flag(read_postfix_blocks, on)} and @tt{notation}
+(see @tt{array_ops.pl} later) to allow the more compact notation
+@tt{M[I1,...,In]} as a notation for @tt{~get_elem(M,[I1,...,In])}.
+
+This allows writing, e.g., @tt{M = fixed_array([2,2]), M[2,1] = 3}
+(which could also be expressed as @tt{fixed_array([2,2])[2,1] = 3}),
 where the call to the @tt{fixed_array} property generates an empty @em{2
-x 2} array @em{M} and @tt{M@@[2,1] = 3} puts @em{3} in @em{M[2,1]}. 
+x 2} array @em{M} and @tt{M[2,1] = 3} puts @em{3} in @em{M[2,1]}. 
 This can be done in the top level:
 @begin{verbatim}
-?- M = ~fixed_array([2,2]), M@@[2,1] = 3.
+?- M = ~fixed_array([2,2]), M[2,1] = 3.
 @end{verbatim}
 @noindent
-provided the @tt{op} and @tt{function} declarations are 
+provided the @tt{op} and @tt{fun_eval} declarations are 
 loaded into the top level also. 
-Another example of use is: @tt{A3@@[N+1,M] = A1@@[N-1,M] + A2@@[N,M+2]}.
+Another example of use is: @tt{A3[N+1,M] = A1[N-1,M] + A2[N,M+2]}.
 
 Such functionality can be grouped into a @em{package} as follows. The
 package main file (@tt{arrays.pl}) might be:
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/arrays.pl} 
-@end{verbatim}
+
+@includecode{fsyntax/examples/arrays.pl} 
+
 @noindent where file @tt{arrays_ops.pl} may contain:
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/arrays_ops.pl} 
-@end{verbatim}
+
+@includecode{fsyntax/examples/arrays_ops.pl} 
+
 @noindent The main file is @tt{arrays_rt.pl} which would contain for example 
 (note that it also uses @tt{arrays_ops.pl}, and that is why the contents of 
 @tt{arrays_ops.pl} were not put directly in @tt{arrays.pl}):
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/arrays_rt.pl} 
-@end{verbatim}
+
+@includecode{fsyntax/examples/arrays_rt.pl} 
+
 A file using this package would be:
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/arrays_test.pl} 
-@end{verbatim}
 
-
+@includecode{fsyntax/examples/arrays_test.pl} 
 
 @section{Examples of combining with higher order} 
 
@@ -505,21 +519,17 @@ instead of lists of ASCII codes).
 
 A definition of the Fibonacci function, written in functional notation: 
 
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/fib_fun.pl}
-@end{verbatim}
+@includecode{fsyntax/examples/fib_fun.pl}
 
 This is the factorial example, written in functional notation and
 including some assertions:
 
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/factf_assrt.pl}
-@end{verbatim}
+@includecode{fsyntax/examples/factf_assrt.pl}
 
-And, the same example written using @lib{clpq} constraints:
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/factf_clpq_assrt.pl}
-@end{verbatim}
+The same example written using @lib{clpq} constraints:
+
+@includecode{fsyntax/examples/factf_clpq_assrt.pl}
+
 @noindent
 which allows for example calling it ``backwards:''
 @begin{verbatim}
@@ -528,32 +538,28 @@ which allows for example calling it ``backwards:''
 X = 4 ? 
 @end{verbatim}
 
+The same example written using arithmetic functors evaluable with
+@lib{clpq} (@bf{experimental} @tt{fun_eval arith(clpq)}):
+
+@includecode{fsyntax/examples/factf_arithclpq_assrt.pl}
 
 A very simple example using lazy evaluation:
 
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/lazy_simple.pl}
-@end{verbatim}
+@includecode{fsyntax/examples/lazy_simple.pl}
 
 A naive reverse example, using functional notation:
 
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/revf.pl}
-@end{verbatim}
+@includecode{fsyntax/examples/revf.pl}
 
 And the same example using some assertions:
 
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/revf_assrt_new.pl}
-@end{verbatim}
+@includecode{fsyntax/examples/revf_assrt_new.pl}
 
 Finally, a simple stream creation example where assertions are used to
 define a safety policy (that no file outside @tt{/tmp} should be
 opened):
 
-@begin{verbatim}
-@includeverbatim{fsyntax/examples/open_file_f_wide.pl}
-@end{verbatim}
+@includecode{fsyntax/examples/open_file_f_wide.pl}
 
    ").
 

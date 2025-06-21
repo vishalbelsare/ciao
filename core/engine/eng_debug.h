@@ -9,8 +9,43 @@
 #ifndef _CIAO_ENG_DEBUG_H
 #define _CIAO_ENG_DEBUG_H
 
-#if !defined(OPTIM_COMP)
-extern bool_t stop_on_pred_calls;
+/* ------------------------------------------------------------------------- */
+/* Stream for debug trace */
+
+/* Stream for tracing (statistics, predicate trace, etc.) */
+
+#if defined(OPTIM_COMP)
+
+#if defined(USE_DEBUG_INSCOUNT) || \
+    defined(USE_LOWRTCHECKS) || \
+    defined(DEBUG_TRACE) || \
+    defined(PROFILE_STATS) || \
+    defined(PROFILE_EVENTFREQ) || \
+    defined(PROFILE_BLOCKFREQ) || \
+    defined(USE_GC_STATS)
+#if !defined(USE_TRACE_OUTPUT)
+#define USE_TRACE_OUTPUT 1
+#endif
+#endif
+
+#if defined(USE_TRACE_OUTPUT)
+// #include <ciao/io_basic.h> /* StreamPrintf */
+extern stream_node_t *stream_trace; /* Shared */
+#define TraceFile stream_trace->streamfile
+// TODO: StreamPrintf requires 'w' (in order to throw IO exceptions)
+//   which is not always available, use fprintf instead of:
+//     StreamPrintf(stream_trace, __VA_ARGS__);
+#define TRACE_PRINTF(...) ({ \
+  fprintf(TraceFile, __VA_ARGS__); \
+  fflush(TraceFile); \
+})
+#endif
+#else
+#define TraceFile stderr
+#define TRACE_PRINTF(...) do { \
+  fprintf(stderr, __VA_ARGS__); \
+  fflush(stderr); \
+} while(0)
 #endif
 
 /* ------------------------------------------------------------------------- */
@@ -22,29 +57,34 @@ extern bool_t stop_on_pred_calls;
 #define USE_DEBUG_INSCOUNT 1
 #endif
 
-#if defined(USE_DEBUG_INSCOUNT)
+#endif /* defined(OPTIM_COMP) */
+
+#if defined(USE_DEBUG_INSCOUNT) /* TODO: currently only OPTIM_COMP */
 extern intmach_t debug_inscount;
 bool_t dump_cond(void);
 void init_debug_inscount(void);
 #define INSCOUNT_NEXT() debug_inscount++
+#define TRACE_INSCOUNT() TRACE_PRINTF("[time = %" PRIdm "] ", debug_inscount)
+#else
+#define TRACE_INSCOUNT() {}
 #endif
-
-#endif /* defined(OPTIM_COMP) */
 
 /* ------------------------------------------------------------------------- */
 /* Low-level runtime checks (debugging) */
 
-#if defined(OPTIM_COMP)
-
 #if defined(USE_LOWRTCHECKS)
-CBOOL__PROTO(proofread, char *text, intmach_t arity, bool_t force);
-void dump_tagged(tagged_t t);
-CVOID__PROTO(dump_call, char *s, definition_t *func);
-
 #define RTCHECK(X) X
 #else
 #define RTCHECK(X) {}
 #endif 
+
+#if defined(OPTIM_COMP)
+
+#if defined(USE_LOWRTCHECKS)
+CBOOL__PROTO(proofread, char *text, arity_t arity, bool_t force);
+void dump_tagged(tagged_t t);
+CVOID__PROTO(dump_call, char *s, definition_t *func);
+#endif
 
 /* TODO: give good definitions */
 #define RTERROR() {}
@@ -59,21 +99,15 @@ CVOID__PROTO(dump_call, char *s, definition_t *func);
 /* ------------------------------------------------------------------------- */
 /* Debug trace */
 
-#if !defined(OPTIM_COMP)
-#define TRACE_PRINTF(...) ({ \
-  fprintf(stderr, __VA_ARGS__); \
-  fflush(stderr); \
-})
+#if defined(DEBUG_TRACE)
+#define DEBUG__TRACE(COND, ...) do { \
+  if ((COND)) { TRACE_PRINTF(__VA_ARGS__); } \
+} while(0)
+#else
+#define DEBUG__TRACE(COND, ...)
 #endif
 
-#if defined(OPTIM_COMP)
-
 #if defined(DEBUG_TRACE)
-
-/* TODO: move tracing outside the debug code? add tracing levels? */
-#define DEBUG__TRACE(COND, ...) ({ \
-  if ((COND)) { TRACE_PRINTF(__VA_ARGS__); } \
-})
 /* debug_trace options */
 extern bool_t debug_predtrace;
 extern bool_t debug_dynlink;
@@ -83,27 +117,17 @@ extern bool_t debug_choicepoints;
 extern bool_t debug_concchoicepoints;
 extern bool_t debug_mem;
 extern bool_t debug_conc;
+#if defined(OPTIM_COMP)
 extern bool_t debug_setarg;
 extern bool_t debug_atomgc;
-
+#else
+extern bool_t debug_instrace;
+#endif
+//
 bool_t debug_trace__get_opt(const char *arg);
 
-#else
-#define DEBUG__TRACE(COND, ...)
-#endif
+#endif /* !defined(DEBUG_TRACE) */
 
-#else /* !defined(OPTIM_COMP) */
-
-#if defined(DEBUG)
-extern bool_t debug_dynlink;
-extern bool_t debug_gc;
-extern bool_t debug_threads;
-extern bool_t debug_choicepoints;
-extern bool_t debug_concchoicepoints;
-extern bool_t debug_mem;
-extern bool_t debug_conc;
-#endif
-
-#endif /* !defined(OPTIM_COMP) */
+CBOOL__PROTO(set_trace_calls);
 
 #endif /* _CIAO_ENG_DEBUG_H */

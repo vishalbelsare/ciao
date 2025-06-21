@@ -1,26 +1,11 @@
-:- module(format, 
-    [
-        format/2, 
-        format/3,
-        sformat/3,
-        format_to_string/3,
-        format_control/1],
-    [dcg,assertions,isomodes,datafacts]).
+:- module(format, [
+    format/2, 
+    format/3,
+    sformat/3,
+    format_to_string/3,
+    format_control/1
+], [dcg,assertions,isomodes,datafacts]).
 
-
-:- use_module(library(streams)).
-:- use_module(library(write)).
-:- use_module(library(system)).
-% :- use_module(library(dcg/dcg_tr)). % This is not at all needed!!
-% >> take '$format_print_float' & '$format_print_integer' out of emulator!DCG
-:- use_module(engine(internals)).
-
-%% FOR TEMPORARILY PARTIALLY DOCUMENTING:
-:- use_module(library(assertions/doc_props)).
-
-:- set_prolog_flag(multi_arity_warnings, off).
-
-% ------------------------------------------------------------------------
 :- doc(title,"Formatted output").
 
 :- doc(author, "The Ciao Development Team").
@@ -56,10 +41,10 @@
     A format may be spread over several lines. The control
     sequence @tt{\\\\c} followed by a @key{LFD} will translate to the 
     empty string:  
-    @begin{verbatim}
-    ?- format(""Hello \\\\c
+    ```
+    ?- format(""Hello \\c
     world!"", []).
-    @end{verbatim}
+    ```
     @noindent
     will result in @tt{Hello world!}.").
 
@@ -108,23 +93,23 @@ times to print the character.
 (Print float).  The argument is a float.  The float and @var{N} will be
 passed to the C @tt{printf()} function as  
 
-@begin{verbatim}
-printf(""%.@var{N}e"", @var{Arg})
-printf(""%.@var{N}E"", @var{Arg})
-printf(""%.@var{N}f"", @var{Arg})
-printf(""%.@var{N}g"", @var{Arg})
-printf(""%.@var{N}G"", @var{Arg})
-@end{verbatim}
+```
+printf(""%.Ne"", Arg)
+printf(""%.NE"", Arg)
+printf(""%.Nf"", Arg)
+printf(""%.Ng"", Arg)
+printf(""%.NG"", Arg)
+```
 
 If @var{N} is not supplied the action defaults to
 
-@begin{verbatim}
-printf(""%e"", @var{Arg})
-printf(""%E"", @var{Arg})
-printf(""%f"", @var{Arg})
-printf(""%g"", @var{Arg})
-printf(""%G"", @var{Arg})
-@end{verbatim}
+```
+printf(""%e"", Arg)
+printf(""%E"", Arg)
+printf(""%f"", Arg)
+printf(""%g"", Arg)
+printf(""%G"", Arg)
+```
 
 @item ~@var{N}d
 (Print decimal.) The argument is an integer. @var{N} is interpreted as the
@@ -165,8 +150,8 @@ Hello 1,234.5 world!
 
 @item ~@var{N}r
 (Print radix.) The argument is an integer. @var{N} is interpreted as a radix.
-@var{N} should be >= 2 and <= 36.  If @var{N} is missing the radix defaults to
-8.  The letters @tt{a-z} will denote digits larger than 9.  Example:  
+@var{N} should be >= 2 and <= 36.  If @var{N} is missing the radix defaults to 8.
+The letters @tt{a-z} will denote digits larger than 9.  Example:  
 
 @begin{verbatim}
 ?- format(""Hello ~2r world!"", [15]).
@@ -351,6 +336,13 @@ position movement to @var{N}, where @var{N} defaults to @key{SPC}.
 
 ").
 
+:- use_module(library(streams)).
+:- use_module(library(write)).
+:- use_module(library(system)).
+:- use_module(engine(io_basic), ['$format_print_float'/3, '$format_print_integer'/3]).
+
+%% FOR TEMPORARILY PARTIALLY DOCUMENTING:
+:- use_module(library(assertions/doc_props)).
 
 % ------------------------------------------------------------------------
 
@@ -415,6 +407,8 @@ format1(Control, Arguments) :-
     fmt_parse(ArgumentList, SpecList, ControlList, []), !,
     current_output(Stream),
     fmt_print(SpecList, 0, 0' , Stream).
+
+:- push_prolog_flag(multi_arity_warnings, off).
 
 fmt_print([], _, _, _).
 fmt_print([X|Xs], Tab, Fill, Stream) :- fmt_print(X, Xs, Tab, Fill, Stream).
@@ -532,6 +526,8 @@ fmt_parse(0'R, [A|Args], [spec(0'R, V, N)|Specs], _, N, 8) -->
 fmt_parse(0's, [A|Args], [spec(0's, A, N)|Specs], _, N, Len) -->
     {is_ascii_list(A, 0, Len)},
     fmt_parse(Args, Specs).
+
+:- pop_prolog_flag(multi_arity_warnings).
 
 is_ascii_list(X, _, _) :- var(X), !, fail.
 is_ascii_list([], N, N).

@@ -18,7 +18,7 @@
 
 /* local declarations */
 
-#define ISNOTRY(T)              (((T)==NULL) || ((T)==fail_alt))
+#define TRY_NODE_IS_NULL(T) (((T)==NULL) || ((T)==fail_alt))
 
 /* Prolog predicates. */
 
@@ -30,7 +30,7 @@ CBOOL__PROTO(counter_values)
   tagged_t values;
 
   DEREF(X(0),X(0));
-  current_counter = (intmach_t *)TermToPointer(X(0));
+  current_counter = TermToPointer(intmach_t, X(0));
 
   DEREF(X(1),X(1));
   count = TaggedToIntmach(X(1));
@@ -62,7 +62,7 @@ CBOOL__PROTO(reset_counters)
   intmach_t *current_counter, *max_counter;
 
   DEREF(X(0),X(0));
-  current_counter = (intmach_t *)TermToPointer(X(0));
+  current_counter = TermToPointer(intmach_t, X(0));
   DEREF(X(1),X(1));
   max_counter = current_counter + TaggedToIntmach(X(1));
 
@@ -83,8 +83,8 @@ CBOOL__PROTO(emulated_clause_counters)
   if (!d)
     return FALSE;
   DEREF(X(1),X(1));
-  for (i=GetSmall(X(1)), cl=d->code.incoreinfo->clauses.ptr; i>1; --i)
-    cl = cl->next.ptr;
+  for (i=GetSmall(X(1)), cl=d->code.incoreinfo->clauses; i>1; --i)
+    cl = cl->next;
   CBOOL__UnifyCons(PointerToTerm(cl->counters),X(2));
   count = NumberOfCounters(cl);
   CBOOL__LASTUNIFY(IntvalToTagged(count),X(3));

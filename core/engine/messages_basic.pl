@@ -1,11 +1,10 @@
 :- module(messages_basic, [
-            message/2, message_lns/4, messages/1,
-            message_type_visible/1,
-            lformat/1, display_list/1,
-            % regtypes
-            message_info/1, message_type/1
-        ],
-    [assertions, nativeprops, nortchecks]).
+    message/2, message_lns/4, messages/1,
+    message_type_visible/1,
+    lformat/1, display_list/1,
+    % regtypes
+    message_info/1, message_type/1
+], [assertions, nativeprops, nortchecks]).
 
 % TODO: move lformat/1, display_list/1 to format_basic.pl?
 
@@ -27,6 +26,7 @@
 :- use_module(engine(runtime_control), [current_module/1]).
 :- use_module(library(stream_utils), [write_string/1]).
 
+% Note: hack, use import to avoid a hard dependency
 :- import(write, [write/1, writeq/1, print/1, printq/1]).
 
 % ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ display_list(M) :-
 :- pred message(Type, Message) : ( message_type(Type),
         lformat_text(Message) ) # "Output to standard error @var{Message},
    which is of type @var{Type}. The @tt{quiet} @index{prolog flag}
-   (see @ref{Changing system behaviour and various flags}) controls
+   (see @ref{Runtime system control and flags}) controls
    which messages are actually output, depending on its type. Also,
    for @tt{error}, @tt{warning}, and @tt{note} messages, a prefix is
    output which denotes the severity of the message.".
@@ -152,7 +152,6 @@ message_(Type, MessL) :-
     output_message(MessL), nl,
     set_output(S).
 
-
 :- pred message_type_visible(Type) : message_type(Type) # "Succeeds if
   message type @var{Type} is visible according to the current value of
   the @tt{quiet} @index{prolog flag}".
@@ -175,8 +174,8 @@ allowed_type(off,     inform) :- !.
 allowed_type(off,     passed) :- !.
 allowed_type(off,     failed) :- !.
 allowed_type(off,     aborted) :- !.
+allowed_type(off,     testing) :- !.
 allowed_type(debug,   _).
-
 
 add_head(user, Mess, Mess) :- !. % TODO: needed?
 add_head(inform, Mess, Mess) :- !.
@@ -192,7 +191,7 @@ label(note,    'Note: ').
 label(passed,  'PASSED: ').
 label(failed,  'FAILED: ').
 label(aborted, 'ABORTED: ').
-
+label(testing, 'TESTING: ').
 
 :- export(add_lines/4).
 add_lines(L0, L1, Message, ['(lns ', L0, '-', L1, ') '|Message]).
@@ -210,9 +209,9 @@ message_type(debug).
 message_type(passed).
 message_type(failed).
 message_type(aborted).
+message_type(testing).
 % TODO: unify with core/lib/messages. Missing here: simple. Missing
 % there: error0, user, inform, passed, failed, aborted
-
 
 :- pred message_output/2 :: message_type * atm.
 
@@ -220,15 +219,15 @@ message_output(error,   user_error).
 message_output(error0,  user_error).
 message_output(warning, user_error).
 message_output(note,    user_error). % TODO: was user_output, simplify code now?
-message_output(user,    user). % TODO: needed?
+message_output(user,    user). % TODO: replace uses by lformat/1
 message_output(inform,  user_error).
 message_output(debug,   user_error).
 message_output(passed,  user_error).
 message_output(failed,  user_error).
 message_output(aborted, user_error).
+message_output(testing, user_error).
 % TODO: unify with core/lib/messages. Common types have already the
 % same output
-
 
 message_info(message_lns(Source, Ln0, Ln1, Type, Text)) :-
     atm(Source),
@@ -254,9 +253,7 @@ message_info(debug(Text)) :- lformat_text(Text).
 % context, with an initial "{In Source" message and a final "}"
 % message.
 
-% TODO: unify with compiler mechanism to handle that source
-% context. Move elsewhere in the meantime.
-
+% TODO: reuse c_itf_messages.pl (see unittest_summaries.pl as an example)
 
 show_close('', _) :- !.
 show_close(_,  Type) :-

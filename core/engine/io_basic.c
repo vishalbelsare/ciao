@@ -6,27 +6,27 @@
  *  See Copyright Notice in ciaoengine.pl
  */
 
-#include <stdio.h>
-#include <errno.h>
-#include <unistd.h>
-#include <stdlib.h>  /* for atoi MCL */
-#include <string.h>
-#include <strings.h>
-
 #include <ciao/eng.h>
-#include <ciao/eng_registry.h>
-#include <ciao/eng_interrupt.h>
+#include <ciao/io_basic.h> /* CheckGetRune, rune.h */
 
-#include <ciao/rune.h>
-#include <ciao/atomic_basic.h>
-#include <ciao/io_basic.h>
-#include <ciao/stream_basic.h>
-#include <ciao/internals.h>
-#include <ciao/eng_start.h>
-#include <ciao/eng_bignum.h>
-#include <ciao/eng_gc.h>
+#if !defined(OPTIM_COMP)
+#include <ciao/eng_registry.h> /* GET_ATOM */
+#include <ciao/eng_interrupt.h> /* int_address */
+#include <ciao/atomic_basic.h> /* number_to_string, string_to_number */
+#include <ciao/stream_basic.h> /* stream_to_ptr_check, stream aliases */
+#include <ciao/eng_bignum.h> /* StringToInt */
+#include <ciao/eng_gc.h> /* explicit_heap_overflow */
+#endif
 
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#if defined(_WIN32) || defined(_WIN64) /* MinGW */
+#else
+#include <sys/select.h> /* select() */ 
+#endif
 
 /* TODO: improve stream abstraction and separate generic code */
 
@@ -87,32 +87,32 @@ int writemb(int fildes, c_rune_t c);
 #endif // USE_MULTIBYTES
 
 #define CheckGetRune(X,C,ArgNo) ({                                      \
-  if (TaggedIsSmall((X))) {                                             \
+  Sw_NUM_Large_Other((X), {                                             \
     C = GetSmall((X));                                                  \
-  } else if (TaggedIsLarge((X)) && !LargeIsFloat((X))) { /* bigint */      \
-    BUILTIN_ERROR(REPRESENTATION_ERROR(CHARACTER_CODE), (X), (ArgNo));  \
-  } else {                                                              \
-    ERROR_IN_ARG((X), (ArgNo), INTEGER);                                \
-  }                                                                     \
+  }, { /* bigint */      \
+    BUILTIN_ERROR(ERR_representation_error(character_code), (X), (ArgNo));  \
+  }, {                                                              \
+    ERROR_IN_ARG((X), (ArgNo), ERR_type_error(integer)); \
+  });                                                                   \
   if (!isValidRune((C))) {                                              \
-    BUILTIN_ERROR(REPRESENTATION_ERROR(CHARACTER_CODE), (X), (ArgNo));  \
+    BUILTIN_ERROR(ERR_representation_error(character_code), (X), (ArgNo));  \
   }                                                                     \
 })
 
-#define CheckGetByte(X,C,ArgNo) ({               \
-  if (!TaggedIsSmall((X))) {                     \
-    ERROR_IN_ARG((X), (ArgNo), (TY_BYTE));       \
-  }                                              \
-  C = GetSmall((X));                             \
-  if ((C) < 0 || (C) > 255) {                    \
-    ERROR_IN_ARG((X), (ArgNo), (TY_BYTE));       \
+#define CheckGetByte(X,C,ArgNo) ({             \
+  if (!TaggedIsSmall((X))) {                   \
+    ERROR_IN_ARG((X), (ArgNo), ERR_type_error(byte)); \
+  }                                            \
+  C = GetSmall((X));                           \
+  if ((C) < 0 || (C) > 255) {                  \
+    ERROR_IN_ARG((X), (ArgNo), ERR_type_error(byte)); \
   } \
 })
 
 /* TODO: throw better exception */
-#define IO_ERROR(Message) ({                    \
-  perror((Message));                          \
-  UNLOCATED_EXCEPTION(RESOURCE_ERROR(R_UNDEFINED)); \
+#define IO_ERROR(Message) ({ \
+  perror((Message)); \
+  UNLOCATED_EXCEPTION(ERR_resource_error(r_undefined)); \
 })
 
 /* UTF8 Support */
@@ -460,8 +460,7 @@ static inline int read_give_back_cond(int op_type, c_rune_t r) {
 
    op_type: DELRET, PEEK, GET, GET1, SKIPLN, or >= 0 for SKIP
  */
-static CFUN__PROTO(readrune, int, stream_node_t *s, int op_type,
-                   definition_t *pred_address) {
+static CFUN__PROTO(readrune, c_rune_t, stream_node_t *s, int op_type, definition_t *pred_address) {
   FILE *f = s->streamfile;
   c_rune_t r;
 
@@ -469,8 +468,8 @@ static CFUN__PROTO(readrune, int, stream_node_t *s, int op_type,
     int_address = pred_address;
     while (TRUE) {
       if (root_stream_ptr->rune_count==root_stream_ptr->last_nl_pos) {
-        CVOID__CALL(print_string, stream_user_output,GetString(current_prompt));
-          /* fflush(stdout); into print_string() MCL */
+        CVOID__CALL(print_string, stream_user_output, GetString(current_prompt));
+        /* fflush(stdout); into print_string() MCL */
       }
 
       if (s->pending_rune == RUNE_VOID) { /* There is no char returned by peek */
@@ -480,7 +479,7 @@ static CFUN__PROTO(readrune, int, stream_node_t *s, int op_type,
         r = s->pending_rune;
         s->pending_rune = RUNE_VOID;
       }
-      
+
       if (read_give_back_cond(op_type,r)) {
         s->pending_rune = r;
       } else {
@@ -638,38 +637,7 @@ void print_syserror(char *s) {
   fprintf(stderr, "ERROR: %s: %s\n", s, strerror(errno));
 }
 
-/*----------------------------------------------------------------*/
-
-CBOOL__PROTO(flush_output) {
-  if (Output_Stream_Ptr->streammode != 's') { /* not a socket */
-    if (fflush(Output_Stream_Ptr->streamfile)) {
-      print_syserror("fflush in flush_output/1");
-    }
-  }
-  CBOOL__PROCEED;
-}
-
-/*----------------------------------------------------------------*/
-
-CBOOL__PROTO(flush_output1) {
-  ERR__FUNCTOR("stream_basic:flush_output", 1);
-  int errcode;
-  stream_node_t *s;
-  
-  s = stream_to_ptr_check(X(0), 'w', &errcode);
-  if (!s) {
-    BUILTIN_ERROR(errcode,X(0),1);
-  }
-
-  if (s->streammode != 's') { /* not a socket */
-    if (fflush(s->streamfile)) {
-      print_syserror("fflush in flush_output/1");
-    }
-  }
-  CBOOL__PROCEED;
-}
-
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
 CBOOL__PROTO(get) {
   ERR__FUNCTOR("io_basic:get_code", 1);
@@ -677,7 +645,7 @@ CBOOL__PROTO(get) {
 
   r = CFUN__EVAL(readrune,Input_Stream_Ptr,GET,address_get);
   if (r == RUNE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
   }
 
   CBOOL__LASTUNIFY(X(0),MakeSmall(r));
@@ -698,7 +666,7 @@ CBOOL__PROTO(get2) {
 
   r = CFUN__EVAL(readrune,s,GET,address_get2);
   if (r == RUNE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),X(0),1);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),X(0),1);
   }
 
   CBOOL__LASTUNIFY(X(1),MakeSmall(r));
@@ -712,7 +680,7 @@ CBOOL__PROTO(get1) {
   
   r = CFUN__EVAL(readrune,Input_Stream_Ptr,GET1,address_get1); /* skip whitespace */
   if (r == RUNE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
   }
 
   CBOOL__LASTUNIFY(X(0),MakeSmall(r));
@@ -733,7 +701,7 @@ CBOOL__PROTO(get12) {
 
   r = CFUN__EVAL(readrune,s,GET1,address_get12); /* skip whitespace */
   if (r == RUNE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),X(0),1);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),X(0),1);
   }
 
   CBOOL__LASTUNIFY(X(1),MakeSmall(r));
@@ -747,7 +715,7 @@ CBOOL__PROTO(peek) {
 
   r = CFUN__EVAL(readrune,Input_Stream_Ptr,PEEK,address_peek);
   if (r == RUNE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
   }
 
   CBOOL__LASTUNIFY(X(0),MakeSmall(r));
@@ -768,13 +736,13 @@ CBOOL__PROTO(peek2) {
 
   r = CFUN__EVAL(readrune,s,PEEK,address_peek2);
   if (r == RUNE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),X(0),1);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),X(0),1);
   }
 
   CBOOL__LASTUNIFY(X(1),MakeSmall(r));
 }
 
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
 /* Read a UTF8 rune (return value) and assign a rune class to *typ */
 static CFUN__PROTO(readrune_mb, c_rune_t,
@@ -834,7 +802,7 @@ CBOOL__PROTO(getct) {
   int typ;
   r = CFUN__EVAL(readrune_mb,Input_Stream_Ptr,GET,address_getct,&typ);
   if (r == RUNE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
   }
   CBOOL__UNIFY(X(0),MakeSmall(r));
   CBOOL__LASTUNIFY(X(1),MakeSmall(typ));
@@ -846,13 +814,13 @@ CBOOL__PROTO(getct1) {
   int typ;
   r = CFUN__EVAL(readrune_mb,Input_Stream_Ptr,GET1,address_getct1,&typ);
   if (r == RUNE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
   }
   CBOOL__UNIFY(X(0),MakeSmall(r));
   CBOOL__LASTUNIFY(X(1),MakeSmall(typ));
 }
 
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
 CBOOL__PROTO(nl) {
   CVOID__CALL(writerune, '\n',Output_Stream_Ptr);
@@ -908,20 +876,19 @@ CBOOL__PROTO(put2) {
   CBOOL__PROCEED;
 }
 
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 /* output stream always write or append */
 
 CBOOL__PROTO(tab) {
   ERR__FUNCTOR("io_basic:tab", 1);
   DEREF(X(0),X(0));
   if (!IsInteger(X(0))) {
-    ERROR_IN_ARG(X(0),1,INTEGER);
+    ERROR_IN_ARG(X(0),1,ERR_type_error(integer));
   }
 
   CVOID__CALL(writerunen, ' ', TaggedToIntmach(X(0)), Output_Stream_Ptr);
   CBOOL__PROCEED;
 }
-
 
 /*----------------------------------------------------------------*/
 
@@ -937,7 +904,7 @@ CBOOL__PROTO(tab2) {
 
   DEREF(X(1),X(1));
   if (!IsInteger(X(1))) {
-    ERROR_IN_ARG(X(1),2,INTEGER);
+    ERROR_IN_ARG(X(1),2,ERR_type_error(integer));
   }
 
   CVOID__CALL(writerunen, ' ', TaggedToIntmach(X(1)), s);
@@ -956,7 +923,7 @@ CBOOL__PROTO(skip) {
   for (r1=r+1; r1!=r;) {
     r1 = CFUN__EVAL(readrune,Input_Stream_Ptr,r,address_skip);
     if (r1 == RUNE_PAST_EOF) {
-      BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+      BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
     }
   }
 
@@ -976,13 +943,13 @@ CBOOL__PROTO(skip2) {
     BUILTIN_ERROR(errcode,X(0),1);
   }
 
-  DEREF(X(1),X(1))
+  DEREF(X(1),X(1));
   CheckGetRune(X(1),r,2);
 
   for (r1=r+1; r1!=r;) {
     r1 = CFUN__EVAL(readrune,s,r,address_skip2);
     if (r1 == RUNE_PAST_EOF) {
-      BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),X(0),1);
+      BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),X(0),1);
     }
   }
 
@@ -1030,7 +997,7 @@ CBOOL__PROTO(skip_line1) {
   CBOOL__PROCEED;
 }
 
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
 CBOOL__PROTO(get_byte1) {
   ERR__FUNCTOR("io_basic:get_byte", 1);
@@ -1038,13 +1005,13 @@ CBOOL__PROTO(get_byte1) {
 
   i = CFUN__EVAL(readbyte,Input_Stream_Ptr,GET,address_get_byte1);
   if (i == BYTE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
   }
 
   CBOOL__LASTUNIFY(X(0),MakeSmall(i));
 }
 
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
 CBOOL__PROTO(get_byte2) {
   ERR__FUNCTOR("io_basic:get_byte", 2);
@@ -1058,13 +1025,13 @@ CBOOL__PROTO(get_byte2) {
 
   i = CFUN__EVAL(readbyte,s,GET,address_get_byte2);
   if (i == BYTE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),X(0),1);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),X(0),1);
   }
 
   CBOOL__LASTUNIFY(X(1),MakeSmall(i));
 }
 
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
 CBOOL__PROTO(peek_byte1) {
   ERR__FUNCTOR("io_basic:peek_byte", 1);
@@ -1072,13 +1039,13 @@ CBOOL__PROTO(peek_byte1) {
 
   i = CFUN__EVAL(readbyte,Input_Stream_Ptr,PEEK,address_peek_byte1);
   if (i == BYTE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
   }
 
   CBOOL__LASTUNIFY(X(0),MakeSmall(i));
 }
 
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
 CBOOL__PROTO(peek_byte2) {
   ERR__FUNCTOR("io_basic:peek_byte", 2);
@@ -1092,13 +1059,13 @@ CBOOL__PROTO(peek_byte2) {
 
   i = CFUN__EVAL(readbyte,s,PEEK,address_peek_byte2);
   if (i == BYTE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),X(0),1);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),X(0),1);
   }
 
   CBOOL__LASTUNIFY(X(1),MakeSmall(i));
 }
 
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
 CBOOL__PROTO(put_byte1) {
   ERR__FUNCTOR("io_basic:put_byte", 1);
@@ -1111,7 +1078,7 @@ CBOOL__PROTO(put_byte1) {
   CBOOL__PROCEED;
 }
 
-/*----------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
 CBOOL__PROTO(put_byte2) {
   ERR__FUNCTOR("io_basic:put_byte", 2);
@@ -1258,11 +1225,23 @@ CVOID__PROTO(print_string, stream_node_t *stream, char *p) {
   fflush(fileptr);
 }
 
-CFUN__PROTO(var_address, intmach_t, tagged_t term)
-{
-  if (IsStackVar(term))
-    term = Tagp(HVA,Heap_End+(TagpPtr(SVA,term)-Stack_Start));
-  return IntmachToTagged(TaggedToPointer(term)-Heap_Start);
+/* From HVA/SVA to NUM (for printing) */
+CFUN__PROTO(var_address, tagged_t, tagged_t term) {
+  intval_t n;
+#if defined(OPTIM_COMP) /* TODO:[oc-merge] divide by sizeof(tagged_t)? */
+  if (TaggedIsSVA(term)) {
+    n = (TaggedToPointer(term) - Stack_Start) * sizeof(tagged_t) + HeapCharSize();
+  } else {
+    n = (TaggedToPointer(term) - Heap_Start) * sizeof(tagged_t);
+  }
+#else
+  if (TaggedIsSVA(term)) {
+    n = TaggedToPointer(Tagp(HVA,Heap_End+(TagpPtr(SVA,term)-Stack_Start)))-Heap_Start;
+  } else {
+    n = TaggedToPointer(term)-Heap_Start;
+  }
+#endif
+  return IntmachToTagged(n);
 }
 
 CVOID__PROTO(print_variable, stream_node_t *stream, tagged_t term) {
@@ -1272,7 +1251,7 @@ CVOID__PROTO(print_variable, stream_node_t *stream, tagged_t term) {
 }
 
 CVOID__PROTO(print_number, stream_node_t *stream, tagged_t term) {
-  CVOID__CALL(number_to_string,term, 10);
+  CVOID__CALL(number_to_string, term, 10);
   CVOID__CALL(print_string, stream, Atom_Buffer);
 }
 
@@ -1345,7 +1324,7 @@ CVOID__PROTO(print_atom, stream_node_t *stream, tagged_t term) {
     *bp++ = '\'';
     *bp++ = 0;
     CVOID__CALL(print_string, stream, buf);
-    // TODO: do not use checkalloc_ARRAY, use the Atom_Buffer instead?! just check the amot length (JFMC)
+    // TODO: do not use checkalloc_ARRAY, use the Atom_Buffer instead?! just check the atom length (JFMC)
     checkdealloc_ARRAY(char, PRINT_ATOM_BUFF_SIZE, buf);
   }
 }
@@ -1356,8 +1335,23 @@ CVOID__PROTO(display_term, tagged_t term, stream_node_t *stream, bool_t quoted) 
   tagged_t aux;
   int arity,i;
 
-  switch (TagOf(term)) {
-  case LST:
+  SwOnAnyTagB(term, t_head_functor, { /* HVA */
+    goto variable;
+  }, { /* SVA */
+    goto variable;
+  }, { /* CVA */
+  variable:
+    CVOID__CALL(print_variable,stream,term);
+  }, { /* NUM */
+  number:
+    CVOID__CALL(print_number,stream,term);
+  }, { /* ATM */
+    if (quoted) {
+      CVOID__CALL(print_atom,stream,term);
+    } else {
+      CVOID__CALL(print_string,stream,TaggedToAtom(term)->name);
+    }
+  }, { /* LST */
     CVOID__CALL(writerune,'[',stream);
     DerefCar(aux,term);
     CVOID__CALL(display_term,aux, stream, quoted);
@@ -1373,39 +1367,20 @@ CVOID__PROTO(display_term, tagged_t term, stream_node_t *stream, bool_t quoted) 
       CVOID__CALL(display_term,term, stream, quoted);
     }
     CVOID__CALL(writerune,']',stream);
-    break;
-  case STR:
-    if (STRIsLarge(term)) goto number;
-    CVOID__CALL(display_term,TaggedToHeadfunctor(term),stream, quoted);
+  }, { /* STR(blob) */
+    /* todo[ts]: change if more blob types are added */
+    goto number;
+  }, { /* STR(struct) */
+    CVOID__CALL(display_term, t_head_functor, stream, quoted);
     CVOID__CALL(writerune,'(',stream);
-    arity = Arity(TaggedToHeadfunctor(term));
+    arity = Arity(t_head_functor);
     for (i=1; i<=arity; i++) {
       if (i>1) CVOID__CALL(writerune,',',stream);
       DerefArg(aux,term,i);
       CVOID__CALL(display_term,aux, stream, quoted);
     }
     CVOID__CALL(writerune,')',stream);
-    break;
-  case UBV:
-  case SVA:
-  case HVA:
-  case CVA:
-    {
-      CVOID__CALL(print_variable,stream,term);
-      break;
-    }
-  case ATM:
-    if (quoted) {
-      CVOID__CALL(print_atom,stream,term);
-    } else {
-      CVOID__CALL(print_string, stream,TaggedToAtom(term)->name);
-    }
-    break;
-  case NUM:
-  number:
-    CVOID__CALL(print_number,stream,term);
-    break;
-  }
+  });
 }
 
 CBOOL__PROTO(prolog_display) {
@@ -1446,24 +1421,10 @@ CBOOL__PROTO(prolog_displayq2) {
   CBOOL__PROCEED;
 }
 
-CBOOL__PROTO(prolog_clearerr) {
-  ERR__FUNCTOR("stream_basic:clearerr", 1);
-  int errcode;
-  stream_node_t *s;
-  
-  s = stream_to_ptr_check(X(0), 'r', &errcode);
-  if (!s) {
-    BUILTIN_ERROR(errcode,X(0),1);
-  }
-  
-  if (s->streammode != 's') { /* not a socket */
-    clearerr(s->streamfile);
-  }
+/* ------------------------------------------------------------------------- */
+/* fastrw */
 
-  CBOOL__PROCEED;
-}
-
-/* --------------------------------------------------------------------------- */
+#if !defined(OPTIM_COMP)
 /* TODO: this code needs serious changes (JF)          */
 /*  - see arithmetic.c for code that keep roots for GC */
 /*  - do not limit number of variables */
@@ -1493,7 +1454,7 @@ CBOOL__PROTO(prolog_fast_read_in_c) {
 
   i = CFUN__EVAL(readbyte, Input_Stream_Ptr, GET, NULL);
   if (i == BYTE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
   }
   CBOOL__TEST(i == FASTRW_VERSION);
 
@@ -1520,7 +1481,7 @@ CBOOL__PROTO(prolog_fast_read_in_c_aux,
   
   k = CFUN__EVAL(readbyte, Input_Stream_Ptr, GET, NULL);
   if (k == BYTE_PAST_EOF) {
-    BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
   }
 
   switch(k) {
@@ -1548,7 +1509,7 @@ CBOOL__PROTO(prolog_fast_read_in_c_aux,
       ENSURE_ATOM_BUFFER(i, { s = (unsigned char *)Atom_Buffer+i; });
       j = CFUN__EVAL(readbyte, Input_Stream_Ptr, GET, NULL);
       if (j == BYTE_PAST_EOF) {
-        BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+        BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
       }
       *s++ = j;
     }
@@ -1589,7 +1550,7 @@ CBOOL__PROTO(prolog_fast_read_in_c_aux,
     case 'S':
       i = CFUN__EVAL(readbyte, Input_Stream_Ptr, GET, NULL);
       if (i == BYTE_PAST_EOF) {
-        BUILTIN_ERROR(PERMISSION_ERROR(ACCESS, PAST_END_OF_STREAM),atom_nil,0);
+        BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
       }
       {
         tagged_t *h = w->heap_top;
@@ -1721,9 +1682,35 @@ CVOID__PROTO(prolog_fast_write_in_c_aux,
     return;
   }
 }
+#endif
 
-/*----------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
+// TODO:[oc-merge] merge both versions
+#if defined(OPTIM_COMP)
+CBOOL__PROTO(raw_copy_stdout) {
+  ERR__FUNCTOR("io_basic:$raw_copy_stdout", 1);
+  int i;
+  stream_node_t *s;
+  
+  s = stream_to_ptr_check(X(0), 'r', &i);
+  if (!s) {
+    BUILTIN_ERROR(i,X(0),1);
+  }
+
+  if ((i = c_getc(s->streamfile)) < -1) {
+    BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
+  }
+  
+  while (i != EOF) {
+    CVOID__CALL(writebyte, i, Output_Stream_Ptr);
+    if ((i = c_getc(s->streamfile)) < -1) {
+      BUILTIN_ERROR(ERR_permission_error(access, past_end_of_stream),atom_nil,0);
+    }
+  }
+  CBOOL__PROCEED;
+}
+#else
 #define COPYBUFSIZE 4096
 
 /* Copy a stream to Output_Stream_Ptr (low level access to FILE)  */
@@ -1758,6 +1745,107 @@ CBOOL__PROTO(raw_copy_stdout) {
   }
   CBOOL__PROCEED;
 }
+#endif
+
+/* --------------------------------------------------------------------------- */
+
+// TODO:[oc-merge] merge stream_wait.pl into io_basic.pl
+
+// NOTE: be careful! data may be lost if we do buffered reads before
+CBOOL__PROTO(prolog_set_unbuf) {
+  ERR__FUNCTOR("io_basic:$set_unbuf", 1);
+  int errcode;
+  stream_node_t *s = stream_to_ptr_check(X(0), 'r', &errcode);
+  if (!s) {
+    BUILTIN_ERROR(errcode,X(0),1);
+  }
+  setbuf(s->streamfile, NULL);
+  CBOOL__PROCEED;
+}
+
+CBOOL__PROTO(prolog_input_wait) {
+  ERR__FUNCTOR("io_basic:$input_wait", 3);
+#if defined(_WIN32) || defined(_WIN64) /* MinGW */
+#warning "TODO(MinGW): we need select() in io_basic:$input_wait"
+  CBOOL__PROCEED; 
+#else
+  int errcode;
+  stream_node_t *s = stream_to_ptr_check(X(0), 'r', &errcode);
+  if (!s) {
+    BUILTIN_ERROR(errcode,X(0),1);
+  }
+
+  int fd = fileno(s->streamfile);
+
+  if (s->pending_rune != RUNE_VOID) { /* RUNE_EOF or valid rune */
+    CBOOL__PROCEED;
+  }
+
+  fd_set set;
+  struct timeval timeout;
+  int rv;
+        
+  DEREF(X(1), X(1));
+  timeout.tv_sec  = TaggedToIntmach(X(1));
+  DEREF(X(2), X(2));
+  timeout.tv_usec = TaggedToIntmach(X(2));
+    
+  FD_ZERO(&set); 
+  FD_SET(fd, &set); 
+    
+  rv = select(fd + 1, &set, NULL, NULL, &timeout);
+    
+  if (rv < 0) {
+    BUILTIN_ERROR(ERR_system_error, TaggedZero, 0);
+  }
+
+  CBOOL__LASTTEST(rv != 0);
+#endif
+}
+
+/* --------------------------------------------------------------------------- */
+
+// TODO:[oc-merge] backport
+#if defined(OPTIM_COMP)
+#define DISPLAY_STRING__BUFFER_SIZE 1024
+#define DISPLAY_STRING__FLUSH { \
+  if (fwrite(buffer, sizeof(unsigned char), buffer_n, out)) {} else {} \
+  buffer_n = 0; \
+}
+#define DISPLAY_STRING__PUT(I) { \
+  buffer[buffer_n++] = (I); \
+  if (buffer_n >= DISPLAY_STRING__BUFFER_SIZE) DISPLAY_STRING__FLUSH; \
+}
+/* Fast string write */
+CBOOL__PROTO(prolog_display_string) {
+  tagged_t term;
+  tagged_t t0;
+  FILE *out;
+  intmach_t i;
+  intmach_t buffer_n;
+  unsigned char buffer[DISPLAY_STRING__BUFFER_SIZE];
+
+  out = Output_Stream_Ptr->streamfile;
+  
+  buffer_n = 0;
+
+  DEREF(term, X(0));
+  while(TaggedIsLST(term)) {
+    DerefCar(t0, term);
+    DerefCdr(term, term);
+    if (!TaggedIsSmall(t0)) goto error;
+    i = GetSmall(t0);
+    if (i < 0 || i > 255) goto error;
+    DISPLAY_STRING__PUT(i);
+  }
+  if (term != atom_nil) goto error;
+  DISPLAY_STRING__FLUSH;
+  CBOOL__PROCEED;
+ error:
+  DISPLAY_STRING__FLUSH;
+  CBOOL__FAIL;
+}
+#endif
 
 /* --------------------------------------------------------------------------- */
 /* Support for the format/2, format/3 predicates. */
@@ -1810,10 +1898,10 @@ CBOOL__PROTO(prolog_format_print_float) {
 }
 
 /*
- * bool_t prolog_format_print_integer(formatChar,arg,precision)
- * char formatChar;     Selects type of format.
- * intmach_t arg;       Value to be printed.
- * intmach_t precision; Precision or radix of printed item.
+ * prolog_format_print_integer(formatChar,arg,precision):
+ *   formatChar: Selects type of format.
+ *   arg:        Value to be printed.
+ *   precision:  Precision or radix of printed item.
  *
  * Description: Print an INTEGER value on file file according to the format
  * specified by formatChar and the precision specified by precision.
@@ -1825,10 +1913,10 @@ CFUN__PROTO(fu1_integer, tagged_t, tagged_t X0);
 
 extern liveinfo_t prolog_format_print_integer__liveinfo;
 
-CBOOL__PROTO(prolog_format_print_integer)
-{
+CBOOL__PROTO(prolog_format_print_integer) {
   char formatChar;
-  int precision, base;
+  int precision;
+  int base;
   
   DEREF(X(0),X(0));
   formatChar = GetSmall(X(0));
@@ -1860,6 +1948,12 @@ CBOOL__PROTO(prolog_format_print_integer)
           int dig1 = (Atom_Buffer[0] == '-');
           int slen = strlen(Atom_Buffer);
           
+#if defined(OPTIM_COMP)
+          while (slen+n+1 > Atom_Buffer_Length) {
+            Atom_Buffer = CHECKREALLOC0_ARRAY(char, Atom_Buffer, Atom_Buffer_Length, 2 * Atom_Buffer_Length);
+            Atom_Buffer_Length <<= 1;
+          }
+#else
           while (slen+n+1 > (i=Atom_Buffer_Length)) {
             Atom_Buffer_Length <<= 1;
             Atom_Buffer = checkrealloc_ARRAY(char,
@@ -1868,6 +1962,7 @@ CBOOL__PROTO(prolog_format_print_integer)
                                              Atom_Buffer);
           }
           UpdateHeapMargins();
+#endif
           
           for (i=slen; i>=dig1; i--)
             Atom_Buffer[i+n] = Atom_Buffer[i];
@@ -1880,6 +1975,12 @@ CBOOL__PROTO(prolog_format_print_integer)
         int slen = strlen(Atom_Buffer);
         int ppos = slen-precision;
         
+#if defined(OPTIM_COMP)
+        if (slen+2 > Atom_Buffer_Length) {
+          Atom_Buffer = CHECKREALLOC0_ARRAY(char, Atom_Buffer, Atom_Buffer_Length, 2 * Atom_Buffer_Length);
+          Atom_Buffer_Length <<= 1;
+        }
+#else
         if (slen+2 > (i=Atom_Buffer_Length)) {
           Atom_Buffer_Length <<= 1;
           Atom_Buffer = checkrealloc_ARRAY(char,
@@ -1888,6 +1989,7 @@ CBOOL__PROTO(prolog_format_print_integer)
                                            Atom_Buffer);
           UpdateHeapMargins();
         }
+#endif
         
         for (i=slen; i>=ppos; i--)
           Atom_Buffer[i+1] = Atom_Buffer[i];
@@ -1910,6 +2012,12 @@ CBOOL__PROTO(prolog_format_print_integer)
       
       if (count>0)
         {
+#if defined(OPTIM_COMP)
+          if (slen+count+1 > Atom_Buffer_Length) {
+            Atom_Buffer = CHECKREALLOC0_ARRAY(char, Atom_Buffer, Atom_Buffer_Length, 2 * Atom_Buffer_Length);
+            Atom_Buffer_Length <<= 1;
+          }
+#else
           if (slen+count+1 > (i=Atom_Buffer_Length)) {
             Atom_Buffer_Length <<= 1;
             Atom_Buffer = checkrealloc_ARRAY(char,
@@ -1918,6 +2026,7 @@ CBOOL__PROTO(prolog_format_print_integer)
                                              Atom_Buffer);
             UpdateHeapMargins();
           }
+#endif
           
           for (i=slen; i>=ppos; i--) {
             Atom_Buffer[i+count] = Atom_Buffer[i];

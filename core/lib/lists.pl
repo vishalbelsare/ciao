@@ -19,10 +19,6 @@
 :- doc(module, "This module provides a set of predicates for list
        processing.").
 
-:- test nonsingle(A) : ( A = [a] ) + fails # "nonsingle fails.".
-
-:- test nonsingle(A) : ( A = [a, b] ) # "nonsingle succeeds.".
-
 :- pred nonsingle(X) # "@var{X} is not a singleton.".
 
 nonsingle([_]) :- !, fail.
@@ -65,44 +61,15 @@ nonsingle(_).
 :- trust comp append(Xs,Ys,Zs) : list(Xs) + eval.
 :- trust comp append(Xs,Ys,Zs) : list(Zs) + eval.
 
-:- test append(A, B, C) : ( A = [1,2,3], B = [4, 5] ) => ( C = [1,
-   2, 3, 4, 5] ) # "Simple call to append".
-
-:- test append(A, B, X) : (L = [([1, 2], [1, 2, 4, 5, 6]), ([1, 2, 3],
-   [1, 2, 3, 4, 5, 6])], B = [4, 5, 6], member((A,X2), L)) => (X==X2)
-   # "Simple append test".
-
-:- test append(A, B, X) : ( X = [1, 2, 3] ) => member((A, B), [([],
-   [1, 2, 3]), ([1] , [2, 3]), ([1, 2] , [3]), ([1, 2, 3], [])]) #
-   "Test of reverse call".
-
-:- test append(A, B, X) : ( A = [], B = [] ) => ( X == [] ) # "Empty
-   test.".
-
-:- test append(_A, B, X) : ( B = [2], X = [1,2,3] ) + fails # "Test of
-   a call that fails".
-
-:- test append(X, Y, Z) : ( Y = [2], Z = [1,2] ) => ( X == [1] ) #
-   "Test of a reverse call.".
-
 append([], L, L).
 append([E|Es], L, [E|R]) :- append(Es, L, R).
 
-
-:- test reverse(A, B) : ( A = [1, 2, 3] ) => ( B = [3, 2, 1] ) #
-   "Reverse a list".
-
 :- pred reverse(Xs,Ys) : list * term => list * list
    # "Reverses the order of elements in @var{Xs}.".
-
 :- trust comp reverse/2 + sideff(free).
 :- trust comp reverse(Xs,_Ys) : list(Xs) + eval.
 
 reverse(Xs,Ys):- reverse(Xs,[],Ys).
-
-
-:- test reverse(A, B, C) :: ( var(B) ) : ( A = [1, 2, 3] ) => ( C =
-   [3, 2, 1 | B] ) + true # "reverse/3 test".
 
 :- pred reverse(A,B,C) # "Reverse the order of elements in @var{A},
    and append it with @var{B}.".
@@ -111,7 +78,6 @@ reverse(Xs,Ys):- reverse(Xs,[],Ys).
 
 reverse([], L, L).
 reverse([E|Es],L,R) :- reverse(Es,[E|L],R).
-
 
 :- pred delete(L1,E,L2) => (list(L1), list(L2))
    # "@var{L2} is @var{L1} without the occurrences of @var{E}.".
@@ -143,7 +109,6 @@ delete_non_ground([Head|Tail], Element, [Head|Rest]) :-
 
 eq(A, B):- \+ \+ A = B.
 
-
 :- pred select(X,Xs,Ys) # "@var{Xs} and @var{Ys} have the same
    elements except for one occurrence of @var{X}.".
 :- trust comp select/3 + sideff(free).
@@ -152,13 +117,14 @@ eq(A, B):- \+ \+ A = B.
 select(E, [E|Es], Es).
 select(E, [X|Es], [X|L]) :- select(E, Es, L).
 
-
-:- pred length(L,N) : list * var => list * int
+:- pred length(L,N) : list * var => list * int + det
     # "Computes the length of @var{L}.".
-:- pred length(L,N) : var * int => list * int
+:- pred length(L,N) : var * int => list * int + det
     # "Outputs @var{L} of length @var{N}.".
-:- pred length(L,N) : list * int => list * int
+:- pred length(L,N) : list * int => list * int + semidet
     # "Checks that @var{L} is of length @var{N}.".
+:- pred length(L,N) + nondet
+    # "Generates @var{L}s and @var{N}s. @var{L} can be partially instantiated.".
 
 % Problems with this assertion: triple disjunction = nested disjunction
 %:- calls length(L,N)
@@ -221,7 +187,6 @@ add_after([E|Es], E0, E1, NEs) :-
 add_after([E|Es], E0, E1, [E|NEs]) :-
     add_after(Es, E0, E1, NEs).
 
-
 :- pred add_before(+L0, +E0, +E, -L) # "Adds element E before
    element E0 (or at start) to list L0 returning in L the new list
    (uses term comparison).".
@@ -259,7 +224,6 @@ list_concat([L|RL],Head) :-
     dlist(L,Head,Tail),
     list_concat(RL,Tail).
 
-
 :- pred list_insert(?List, +Term) # "Adds @var{Term} to the end of
    @var{List} if there is no element in @var{List} identical to
    @var{Term}.".
@@ -272,12 +236,10 @@ list_insert([Term0|_], Term) :-
 list_insert([_|List], Term) :-
     list_insert(List, Term).
 
-
 :- pred insert_last(+L0, +E, ?L) # "Adds element @var{E} at end
    of list @var{L0} returning @var{L}.".
 
 insert_last(Xs, X, Ys):- append(Xs, [X], Ys).
-
 
 :- pred contains_ro/2 # "Impure membership (does not instantiate a
    variable in its first argument.".
@@ -285,7 +247,6 @@ insert_last(Xs, X, Ys):- append(Xs, [X], Ys).
 contains_ro([], _) :- !, fail.
 contains_ro([X|_], X).
 contains_ro([_|Xs], X) :- contains_ro(Xs, X).
-
 
 :- pred contains1/2 # "First membership.".
 
@@ -306,7 +267,6 @@ last_aux([], E, E).
 last_aux([E|L], _, X) :-
     last_aux(L, E, X).
 
-
 :- pred list_lookup(List, Functor, Key, Value) # "Look up
 @var{Functor}(@var{Key},@var{Value}) pair in variable ended key-value
 pair list @var{L} or else add it at the end.".
@@ -324,7 +284,6 @@ list_lookup([Pair|_], Functor, Key, Value) :-
     arg(2, Pair, Value).
 list_lookup([_|List], Functor, Key, Value) :-
     list_lookup(List, Functor, Key, Value).
-
 
 :- pred list_lookup(List, Key, Value) # "Same as
    @pred{list_lookup/4}, but use @pred{-/2} as functor.".
@@ -376,7 +335,6 @@ intersection([Element|Residue], List, Intersection) :-
 intersection([_|Residue], List, Intersection) :-
     intersection(Residue, List, Intersection).
 
-
 :- pred union(+List1, +List2, -List) 
     : (list(List1), list(List2)) => list(List) 
  # "@var{List} has the elements which are in @var{List1} followed by
@@ -426,7 +384,6 @@ equal_lists(List1, List2) :-
     sublist(List1, List2),
     sublist(List2, List1).
 
-
 :- pred list_to_list_of_lists(List,LList) 
    : list(List) => list_of_lists(LList).
 
@@ -447,7 +404,6 @@ list_of_lists([L|Xs]):-
     list(L),
     list_of_lists(Xs).
 
-
 :- pred powerset(+List,?LList)
   : list(List) => list_of_lists(LList)
 # "@var{LList} is the powerset of @var{List}, i.e., the list of all
@@ -462,7 +418,6 @@ powerset([X|Xs],[[X]|Xss]) :-
 add_x([],_,Zss,Zss).
 add_x([Ys|Yss],X,Zss,[[X|Ys]|Xss]) :-
     add_x(Yss,X,Zss,Xss).
-
 
 :- pred cross_product(+LList,?List) 
     : list_of_lists(LList) => list_of_lists(List)

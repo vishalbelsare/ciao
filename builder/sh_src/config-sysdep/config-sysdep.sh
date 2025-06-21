@@ -46,9 +46,9 @@ bld_objdir="$cardir/objs/$eng_cfg"
 
 # Select target architecture
 case "$eng_cross_os$eng_cross_arch" in
-    LINUXx86_JS)
-        CIAOOS=LINUX
-        CIAOARCH=x86_JS # uname() in Emscripten is x86-JS
+    EMSCRIPTEN*)
+        CIAOOS=$eng_cross_os
+        CIAOARCH=$eng_cross_arch # uname() in Emscripten
         ;;
     *)
         CIAOOS=$core__OS
@@ -67,7 +67,7 @@ case "$core__DEBUG_LEVEL" in
         core__OPTIM_LEVEL=normal # TODO: why?
         ;;
     profile)
-        core__OPTIM_LEVEL=debug # TODO: why?
+        core__OPTIM_LEVEL=optimized # TODO: it was 'debug', why?
         ;;
     profile-debug)
         core__OPTIM_LEVEL=debug # TODO: why?
@@ -78,7 +78,28 @@ esac
 # Basic platform-dependent configuration options (architecture, OS,
 # compiler, C flags for threads, sockets, etc.)
 
-. "$_base"/cc_test_option
+# Check if CC admits the given option (compiling a dummy file)
+cc_test_option() { # Options
+    local temp_base temp_c temp_exec temp_err ret
+    if [ ! -z $CC ] && type $CC > /dev/null ; then 
+	temp_base=${TMPDIR:-/tmp}/cc_option_test_$$
+	temp_c=$temp_base.c
+	temp_exec=$temp_base.exe
+	temp_err=$temp_base.err
+	echo 'int main() { return 0; }' > "$temp_c"
+	"$CC" "$@" "$temp_c" -o "$temp_exec" 2> "$temp_err"
+	if test -s "$temp_err" ; then
+	    ret=1 # false
+	else
+	    ret=0 # true
+	fi
+        # Get rid of the now unneeded intermediate files
+	rm -f "$temp_c" "$temp_exec" "$temp_err"
+    else
+	ret=1
+    fi
+    return $ret
+}
 
 # Set CC (C compiler) and LD (linker)
 if [ x"$core__CUSTOM_CC" != x"" ]; then
@@ -95,11 +116,11 @@ elif [ x"$core__CUSTOM_LD" != x"" ]; then
 else
     # Detect based on OS and architecture
     case "$CIAOOS$CIAOARCH" in
-        Solaris*)    CC=gcc; LD=ld ;;
-        LINUXarmv5tel)  CC=arm-linux-gcc; LD=arm-linux-gcc ;; # TODO: Recover cross compilation
-#       crossWin32i686)  CC=i386-mingw32-gcc; LD=i386-mingw32-gcc ;; # TODO: Recover cross compilation
-        DARWIN*)        CC=clang; LD=clang ;;
-        LINUXx86_JS)    CC=emcc; LD=emcc ;; # Emscripten
+        Solaris*)         CC=gcc; LD=ld ;;
+        LINUXarmv5tel)    CC=arm-linux-gcc; LD=arm-linux-gcc ;; # TODO: Recover cross compilation
+#       crossWin32i686)   CC=i386-mingw32-gcc; LD=i386-mingw32-gcc ;; # TODO: Recover cross compilation
+        DARWIN*)          CC=clang; LD=clang ;;
+        EMSCRIPTEN*)      CC=emcc; LD=emcc ;; # Emscripten
         *)
             # The rest of the systems just use plain 'gcc'
             CC=gcc; LD=gcc ;;
@@ -119,7 +140,7 @@ fi
 
 # Override core__USE_THREADS if needed
 case "$CIAOOS$CIAOARCH" in
-    LINUXx86_JS) core__USE_THREADS=no ;;
+    EMSCRIPTEN*) core__USE_THREADS=no ;;
 esac
 
 # Libraries and flags to use threads
@@ -142,6 +163,7 @@ if test x"$core__USE_THREADS" = x"yes"; then
         Solaris*) LD_THREAD_LIB="-lpthread" ;;
         BSD*)     LD_THREAD_LIB="-lpthread" ;;
         LINUX*)   LD_THREAD_LIB="-lpthread" ;;
+        EMSCRIPTEN*) LD_THREAD_LIB="-lpthread" ;;
     esac
 fi
 
@@ -150,10 +172,10 @@ fi
 ARCHFLAGS=
 LDARCHFLAGS=
 case "$CIAOARCH" in
-    i686)  ARCHFLAGS="-m32" ; LDARCHFLAGS="-m32" ;;
-    ppc)   ARCHFLAGS="-m32" ; LDARCHFLAGS="-m32" ;;
-    Sparc) ARCHFLAGS="-m32" ; LDARCHFLAGS="-m32" ;;
-    x86_JS) ARCHFLAGS="-m32" ; LDARCHFLAGS="-m32" ;; # Only 32-bits
+    i686)   ARCHFLAGS="-m32" ; LDARCHFLAGS="-m32" ;;
+    ppc)    ARCHFLAGS="-m32" ; LDARCHFLAGS="-m32" ;;
+    Sparc)  ARCHFLAGS="-m32" ; LDARCHFLAGS="-m32" ;;
+    wasm32) ARCHFLAGS="-m32" ; LDARCHFLAGS="-m32" ;;
 esac
 case "$CIAOOS$CIAOARCH" in
     # TODO: WHY??
@@ -168,6 +190,7 @@ case "$CIAOOS$CIAOARCH" in
     DARWINppc) CCSHARED="-fPIC" ; LDSHARED="-flat_namespace -dynamiclib -undefined suppress" ;;
     DARWIN*)   CCSHARED="-fPIC" ; LDSHARED="-dynamiclib -undefined dynamic_lookup" ;;
     LINUX*)    CCSHARED="-fPIC" ; LDSHARED="-shared" ;;
+    EMSCRIPTEN*) CCSHARED="-fPIC" ; LDSHARED="-shared" ;;
     Solaris*)  CCSHARED= ; LDSHARED="-G" ;;
     # note: -fPIC and -rdynamic are unused in Windows
     Win32*)    CCSHARED= ; LDSHARED="-shared" ;;
@@ -176,7 +199,7 @@ esac
 # Extension of executables
 EXECSUFFIX=
 case "$CIAOOS$CIAOARCH" in
-    LINUXx86_JS) EXECSUFFIX=".js" ;;
+    EMSCRIPTEN*) EXECSUFFIX=".js" ;;
     Win32*) EXECSUFFIX=".exe" ;;
 esac
 
@@ -204,48 +227,36 @@ case "$core__DEBUG_LEVEL" in
     *) ;;
 esac
 # C level debugging information
-# TODO: LINUXx86_JS: add ASSERTIONS=2 for debugging
+# TODO: EMSCRIPTEN: add ASSERTIONS=2 for debugging
 case "$core__DEBUG_LEVEL" in
     paranoid-debug|debug|profile-debug)
         DEBUG_FLAGS="$DEBUG_FLAGS -g"
         ;;
     *) ;;
 esac
-# Instrument for gprof profiling
-case "$core__DEBUG_LEVEL" in
-    profile|profile-debug)
-        DEBUG_FLAGS="$DEBUG_FLAGS -pg"
-        PROFILE_LD_FLAGS="-pg"
-        ;;
-    *) ;;
-esac
+# # TODO: only for C engine profiling; enable with a different flag
+# # Instrument for gprof profiling
+# case "$core__DEBUG_LEVEL" in
+#     profile|profile-debug)
+#         DEBUG_FLAGS="$DEBUG_FLAGS -pg"
+#         PROFILE_LD_FLAGS="-pg"
+#         ;;
+#     *) ;;
+# esac
 
 # C optimization flags
 
-if cc_test_option -falign-functions=2; then
-    ALIGN_FLAGS="-falign-loops=2 -falign-jumps=2 -falign-functions=2"
-elif cc_test_option -malign-functions=2; then
-    # Version =< 3.1 of gcc only admits the -m form
-    ALIGN_FLAGS="-malign-loops=2 -malign-jumps=2 -malign-functions=2"
-else
-    # Other compilers like clang does not admit this flag
-    ALIGN_FLAGS=""
-fi
-# TODO: Review ALIGN_FLAGS in those OS and architectures
-case "$CIAOOS$CIAOARCH" in
-    Solarisi686) ALIGN_FLAGS="" ;;
-    *alpha)      ALIGN_FLAGS="" ;;
-    *Sparc)      ALIGN_FLAGS="" ;;
-    *Sparc64)    ALIGN_FLAGS="" ;;
-    *armv4l)     ALIGN_FLAGS="" ;;
-    *armv5tel)   ALIGN_FLAGS="" ;;
-esac
+# TODO: review if this is needed now and what are the best options
+ALIGN_FLAGS=""
+# if cc_test_option "-falign-functions=2"; then # TODO: needed now? (only GCC)
+#     ALIGN_FLAGS="-falign-functions=2 -falign-loops=2 -falign-jumps=2 $ALIGN_FLAGS"
+# fi
 
 # Code generation options
 OPTIM_FLAGS0="-fomit-frame-pointer $ALIGN_FLAGS"
 if test x"$core__OPTIM_LEVEL" = x"optimized"; then
     case "$CIAOOS$CIAOARCH" in
-        LINUXx86_JS) OPTIM_FLAGS="-fno-strict-aliasing -Oz -O3 $OPTIM_FLAGS0" ;;
+        EMSCRIPTEN*) OPTIM_FLAGS="-fno-strict-aliasing -Oz -O3 $OPTIM_FLAGS0" ;;
         *) OPTIM_FLAGS="-fno-strict-aliasing -O2 $OPTIM_FLAGS0"
     esac
 else
@@ -255,12 +266,16 @@ fi
 # Special cases where -fPIC is needed to allow compilation as shared library
 case "$CIAOOS$CIAOARCH" in
     LINUXx86_64)  OPTIM_FLAGS="-fPIC $OPTIM_FLAGS" ;;
-    LINUXx86_JS)  OPTIM_FLAGS="-fPIC $OPTIM_FLAGS" ;;
     LINUXaarch64) OPTIM_FLAGS="-fPIC $OPTIM_FLAGS" ;;
     BSDx86_64)    OPTIM_FLAGS="-fPIC $OPTIM_FLAGS" ;;
+    EMSCRIPTEN*)  OPTIM_FLAGS="-fPIC $OPTIM_FLAGS" ;;
 esac
 # Workaround bug in Darwin19/Xcode 11 (Catalina) # TODO: remove when they fix it
 OPTIM_FLAGS="-fno-stack-check $OPTIM_FLAGS"
+# Disable -Wcompound-token-split-by-macro flag (clang 12) -- see optim-comp
+if cc_test_option "-Wno-compound-token-split-by-macro"; then # TODO: needed now? (only GCC)
+    OPTIM_FLAGS="-Wno-compound-token-split-by-macro $OPTIM_FLAGS"
+fi
 # Select C standard
 OPTIM_FLAGS="-Wall -Wstrict-prototypes -std=gnu11 $OPTIM_FLAGS"
 
@@ -270,8 +285,9 @@ OPTIM_FLAGS="-Wall -Wstrict-prototypes -std=gnu11 $OPTIM_FLAGS"
 #   against
 LDFLAGS0=
 case "$CIAOOS$CIAOARCH" in
-    BSD*)          LDFLAGS0="-rdynamic" ;;
-    LINUX*)        LDFLAGS0="-rdynamic" ;;
+    BSD*)        LDFLAGS0="-rdynamic" ;;
+    LINUX*)      LDFLAGS0="-rdynamic" ;;
+    EMSCRIPTEN*) LDFLAGS0="-rdynamic" ;;
     *) ;;
 esac
 # 
@@ -307,7 +323,7 @@ case "$CIAOOS$CIAOARCH" in
     # LIBS=-ldl
     DARWIN*)      LIBS0= ;;
     Solaris*)     LIBS0="-ldl -lm -lnsl" ;;
-    LINUXx86_JS)  LIBS0="" ;;
+    EMSCRIPTEN*)  LIBS0="-lnodefs.js" ;; # add NODEFS support
     *) LIBS0="-ldl -lm" ;;
 esac
 
@@ -354,7 +370,7 @@ emit_cdefs() {
     if test x"$core__PROFILE_STATS" = x"yes"; then emit_cdef "PROFILE_STATS"; fi
     # Enable dynamic linking
     case "$CIAOOS$CIAOARCH" in
-        LINUXx86_JS) true ;;
+        EMSCRIPTEN*) true ;;
         *) emit_cdef "FOREIGN_FILES" ;;
     esac
     # WAM level debugging
@@ -374,8 +390,11 @@ emit_cdefs() {
         # Do not use USE_MMAP for own_malloc in 64-bit architectures
         *Sparc64)        emit_cdef "USE_OWN_MALLOC" ;;
         *x86_64)         emit_cdef "USE_OWN_MALLOC" ;;
-        *x86_JS)         true ;;
+        *wasm32)         true ;;
+        *wasm64)         true ;;
+        *wasm32p64)      true ;;
         *ppc64)          emit_cdef "USE_OWN_MALLOC" ;;
+        *ppc64le)        emit_cdef "USE_OWN_MALLOC" ;;
         *aarch64)        emit_cdef "USE_OWN_MALLOC" ;;
         # (assume 32-bit)
         *) emit_cdef "USE_MMAP"; emit_cdef "ANONYMOUS_MMAP" ;;
@@ -432,13 +451,13 @@ esac
 
 # Compile as dynamic library
 case "$CIAOOS$CIAOARCH" in
-    LINUXx86_JS) ENG_DYNLIB=0 ;;
+    EMSCRIPTEN*) ENG_DYNLIB=0 ;;
     *)           ENG_DYNLIB=1 ;;
 esac
 
 # Fix computed size in executable
 case "$CIAOOS$CIAOARCH" in
-    LINUXx86_JS) ENG_FIXSIZE=0 ;;
+    EMSCRIPTEN*) ENG_FIXSIZE=0 ;;
     *)           ENG_FIXSIZE=1 ;;
 esac
 
@@ -449,29 +468,54 @@ CFLAGS="-I$bld_hdir $CFLAGS"
 
 # ===========================================================================
 
-# Patch configuration for Emscripten (LINUXx86_JS)
+# Patch configuration for Emscripten (EMSCRIPTEN)
 
 case "$CIAOOS$CIAOARCH" in
-    LINUXx86_JS)
+    EMSCRIPTEN*)
         # It needs source dir in the include path (probably a bug:
         # emcc does not locate included files from some symlinked .c
         # files)
-        CFLAGS="-I$bld_srcdir $CFLAGS"
+        CFLAGS="-I$bld_srcdir $CFLAGS" # TODO: Debug flags: -g -gsource-map
         # Optimization flags must be included during link
         LDFLAGS="$LDFLAGS $OPTIM_FLAGS"
-        # Other hardwired options (see ciaojs)
+        # Other hardwired options (see ciaowasm)
         # TODO: customize
+        # TODO: Debug flags: -sSAFE_HEAP=1 -gsource-map -g
+        #   surprisingly "-s ASSERTIONS=0" makes it slower
+        # TODO: future flags: -sJSPI (node requires --experimental-wasm-jspi, performance seems OK)
         LDFLAGS="$LDFLAGS \
+-s ASSERTIONS=2 \
+-s SAFE_HEAP=0 \
 -s MAIN_MODULE=2 \
 -s DEFAULT_LIBRARY_FUNCS_TO_INCLUDE=['\$Browser'] \
 -s LZ4=1 \
 -s FORCE_FILESYSTEM=1 \
+-s INITIAL_MEMORY=20971520 \
+-s ALLOW_MEMORY_GROWTH=1 \
+-s NODEJS_CATCH_EXIT=0 \
+-s NODEJS_CATCH_REJECTION=0 \
+-s EXPORTED_FUNCTIONS='[\
+  \"_free\"]' \
 -s EXPORTED_RUNTIME_METHODS='[\
+  \"FS\",\
   \"FS_createPath\",\
   \"addRunDependency\",\
   \"removeRunDependency\",\
+  \"POINTER_SIZE\",\
+  \"stringToNewUTF8\",\
   \"ccall\",\
   \"cwrap\"]'"
+        ;;
+esac
+
+case "$CIAOOS$CIAOARCH" in
+    *wasm64)
+        CFLAGS="$CFLAGS -sMEMORY64=1"
+        LDFLAGS="$LDFLAGS -sMEMORY64=1 -sWASM_BIGINT=1" # -sMODULARIZE=1
+        ;;
+    *wasm32p64) # hybrid, LP64 compiled to wasm32
+        CFLAGS="$CFLAGS -sMEMORY64=2"
+        LDFLAGS="$LDFLAGS -sMEMORY64=2 -sWASM_BIGINT=1" # -sMODULARIZE=1
         ;;
 esac
 

@@ -12,7 +12,7 @@
 
 :- use_module(engine(runtime_control), [current_prolog_flag/2]).
 :- use_module(library(assertions/assertions_props), [head_pattern/1]).
-% see formulae, conj_to_list/2, list_to_conj/2
+:- use_module(library(formulae), [conj_to_list/2, list_to_conj/2]).
 :- use_module(library(aggregates), [findall/3, findall/4]).
 :- use_module(library(lists), [member/2]).
 :- use_module(library(lists), [append/3, reverse/2, select/3]).
@@ -31,7 +31,8 @@
     defines_module/2,
     exports_pred/3,
     location/1,
-    location/3]).
+    location/3,
+    dyn_decl/4]).
 
 % ---------------------------------------------------------------------------
 
@@ -49,6 +50,11 @@ meta_predicate(F, A, PredSpec, M) :-
     multifile(M, F, A),
     functor(PredSpec, F, A),
     meta_args(multifile, PredSpec).
+meta_predicate(F, A, PredSpec, M) :- var(A), !,
+    % TODO:[JF] check if this new clause is OK, (pre-ISO functor/3 silently failed here)
+    defines_module(Base, M),
+    imports_pred(Base, _, F, A, _, PredSpec, _),
+    functor(PredSpec, F, A).
 meta_predicate(F, A, PredSpec, M) :-
     functor(PredSpec, F, A),
     defines_module(Base, M),
@@ -167,6 +173,10 @@ rtcheck_assr_type(comp).
 rtcheck_assr_type(exit).
 rtcheck_assr_type(success).
 
+is_dyn_pred(M, F, A) :-  
+    ( defines_module(Base, M) -> true ; fail ),
+    dyn_decl(Base, F, A, _Decl). % data, dynamic, or concurrent
+
 proc_posponed_sentence(Clauses, M) :-
     posponed_sentence_db(F, A, Head, Body0, loc(S, LB, LE), M, Dict),
     asserta_fact(location(S, LB, LE), Ref),
@@ -182,6 +192,7 @@ current_assertion_2(Pred0, Status, Type, Pred, Compat, Call, Succ, Comp0,
     assertion_read(Pred0, M, Status, Type, ABody, Dict0, S, LB, LE),
     valid_assertions(Status, Type),
     functor(Pred0, F, CA),
+    \+ is_dyn_pred(M, F, A),
     lit_clause_arity(M, F, A, CA),
     (
         (
@@ -197,7 +208,6 @@ current_assertion_2(Pred0, Status, Type, Pred, Compat, Call, Succ, Comp0,
         fail
     ),
     assertion_body(Pred, Compat, Call, Succ, Comp0, _Comm, ABody),
-    \+ (Compat=[], Call=[], Succ=[], Comp0=[]), % at least one non-empty relevant field
     \+ member(no_rtcheck(_), Comp0),
     \+ black_list_pred(F, A).
 
@@ -206,6 +216,7 @@ remaining_pred(F, A, M) :-
     \+ generated_rtchecks_db(F, A, M).
 
 black_list_pred('=', 2).
+black_list_pred('==', 2).
 
 proc_remaining_assertions(Preds, [(:- redefining(F/A))|Clauses], M, Dict) :-
     member(F/A, Preds),
@@ -242,6 +253,7 @@ do_rtchecks_sentence_tr((:- Decl),[],_,_) :-
     PropDef  = :(_ModDef ,/(DefF ,DefA)),
     PropImpl = :(_ModImpl,/(ImplF,ImplA)),
     asserta_fact(rtc_impl(DefF, DefA, inst, ImplF, ImplA)).
+
 do_rtchecks_sentence_tr((:- _Decl), _, _, _) :-
     !,
     fail.
@@ -251,14 +263,13 @@ do_rtchecks_sentence_tr((?- _), _, _, _) :-
 do_rtchecks_sentence_tr(Head, Clauses, M, Dict) :-
     process_sentence(Head, true, Clauses, M, Dict).
 
-proc_ppassertion(check(Goal), PredName, Dict, Loc, rtcheck(NewGoal, PredName,
-            Dict, Loc)) :-
-    get_check_props([Goal],calls,p(Goal),[NewGoal]). % TODO: which variables should not be further instantiated?
+proc_ppassertion(check(Goal), PredName, Dict, Loc, RTCheck) :-
+    get_check_ppassrt(Goal, PredName, Dict, Loc, RTCheck).
 proc_ppassertion(trust(Goal), PredName, Dict, Loc, RTCheck) :-
     ( current_prolog_flag(rtchecks_trust, yes) ->
-        get_check_props([Goal],calls,p(Goal),[NewGoal]), % TODO: which variables should not be further instantiated?
-        RTCheck = rtcheck(NewGoal, PredName, Dict, Loc)
-    ; RTCheck = true ).
+        get_check_ppassrt(Goal, PredName, Dict, Loc, RTCheck)
+    ; RTCheck = true
+    ).
 % TODO:
 % Assume property mylistlegth/2, then:
 %
@@ -273,6 +284,20 @@ proc_ppassertion(trust(Goal), PredName, Dict, Loc, RTCheck) :-
 % is related to shared vars in hiord terms.
 proc_ppassertion(true(_),  _, _, _, true).
 proc_ppassertion(false(_), _, _, _, true).
+
+get_check_ppassrt(Goal, PredName, Dict, Loc, RTCheck) :-
+    conj_to_list(Goal, GoalList),
+    get_relevant_variables(GoalList, RelevantVars),
+    get_check_props(GoalList,ppassrt,RelevantVars,NewGoalList), % TODO: which variables should not be further instantiated?
+    list_to_conj(NewGoalList, NewGoal),
+    RTCheck = rtcheck(NewGoal, Goal, PredName, Dict, Loc). % TODO: storing the original goal here is too costly
+
+
+get_relevant_variables(GoalList, RelevantVars) :-
+    ( select(clique(_Vars), GoalList, GoalList2) -> true % variables included in clique/1 are not considered
+    ;   GoalList2 = GoalList  % note: assume Goal contains all relevant vars
+    ),
+    varset(GoalList2, RelevantVars).
 
 % --------------------------------------------- (begin) goal translation
 
@@ -336,6 +361,10 @@ cleanup_goal_alias_db(M) :-
 cleanup_generated_rtchecks_db(M) :-
     retractall_fact(generated_rtchecks_db(_, _, M)).
 
+process_sentence(Head, Body, [(Head :- Body)], M, _) :-
+    functor(Head, F, A),
+    is_dyn_pred(M, F, A), !.
+    
 process_sentence(Head, Body0, Clauses, M, Dict) :-
     functor(Head, F, A),
     (
@@ -697,7 +726,8 @@ current_assertion(Pred0, M,
             PredName, CompatName, CallName, SuccName, CompName, Dict)) :-
     current_assertion_2(Pred0, Status, Type, Pred, Compat, Call, Succ,
         Comp0, Dict0, S, LB, LE, _F, _A, M),
-    Loc = loc(S, LB, LE),
+    %Loc = loc(S, LB, LE),
+    ( member(srcloc(_Head,OSrc,OLB,OLE), Comp0) -> Loc = loc(OSrc,OLB,OLE) ; Loc = loc(S,LB,LE) ),
     collapse_dups(Comp0, Comp),
     Term = n(Pred, Compat, Call, Succ, Comp),
     current_prolog_flag(rtchecks_namefmt, NameFmt),
@@ -775,7 +805,8 @@ compat_rtcheck(
     member((Status, Type), StatusTypes),
     \+(Compat == []),
     insert_posloc(UsePosLoc, PName, PLoc, ALoc, PosLocs, PredName, PosLoc),
-    get_check_props(Compat,compat,Pred,CheckProps),
+    varset(Pred, RelevantVars),
+    get_check_props(Compat,compat,RelevantVars,CheckProps),
     ChkCompat = checkc(CheckProps, CompatNames, PropName-PropDict, Exit).
 
 compat_rtchecks(Assertions, Pred, PLoc, UsePosLoc, PosLocs,
@@ -793,9 +824,10 @@ calls_rtcheck(
          send_rtcheck(calls, PredName, Dict, PropName, PropDict, PosLoc),
        Exit)) :-
     member((Status, Type), StatusTypes),
-    \+(Call == []),
+    % \+(Call == []), % Commented out. It should not ignore empty calls assertions
     insert_posloc(UsePosLoc, PName, PLoc, ALoc, PosLocs, PredName, PosLoc),
-    get_check_props(Call, calls, Pred, CheckProps),
+    varset(Pred, RelevantVars),
+    get_check_props(Call, calls,  RelevantVars, CheckProps),
     ChkCall = checkc(CheckProps, CallNames, PropName-PropDict, Exit).
 
 calls_rtchecks(Assertions, Pred, PLoc, UsePosLoc, PosLocs, StatusTypes,
@@ -828,13 +860,14 @@ success_rtcheck(
     member((Status, Type), StatusTypes),
     \+(Succ == []),
     insert_posloc(UsePosLoc, PName, PLoc, ALoc, PosLocs, PredName, PosLoc),
+    varset(Pred, RelevantVars),
     (
         Call=[] -> Exit=true, ChkCall=true
     ;
-        get_check_props(Call, calls, Pred, CheckProps),
+        get_check_props(Call, calls, RelevantVars, CheckProps),
         ChkCall = checkc(CheckProps, Exit)
     ),
-    get_check_props(Succ, success, Pred, RtcSucc),
+    get_check_props(Succ, success, RelevantVars, RtcSucc),
     ChkSucc = i(PosLoc, PredName, Dict, RtcSucc, SuccNames, Exit).
 
 
@@ -859,9 +892,10 @@ compatpos_rtcheck(
     member((Status, Type), StatusTypes),
     \+(Compat == []),
     insert_posloc(UsePosLoc, PName, PLoc, ALoc, PosLocs, PredName, PosLoc),
-    get_check_props(Compat, compat,Pred, CheckProps),
+    varset(Pred, RelevantVars),
+    get_check_props(Compat, compat, RelevantVars, CheckProps),
     ChkCompat = checkc(CheckProps, Exit),
-    get_check_props(Compat, compatpos, Pred, RtcCompat),
+    get_check_props(Compat, compatpos, RelevantVars, RtcCompat),
     ChkCompatPos = i(PosLoc, PredName, Dict, RtcCompat, CompatNames, Exit).
 
 :- pred collapse_dups(+list, ?list) # "Unifies duplicated terms.".
@@ -910,14 +944,15 @@ comp_rtcheck(
         comp(ChkCall, Call, Exit, ChkComp, Comp)) :-
     member((Status, Type), StatusTypes),
     \+(Comp == []),
+    varset(Pred, RelevantVars),
     (
         Call=[] -> Exit=true, ChkCall=true
     ;
-        get_check_props(Call, calls, Pred, CheckProps),
+        get_check_props(Call, calls, RelevantVars, CheckProps),
         ChkCall = checkc(CheckProps, Exit)
     ),
     insert_posloc(UsePosLoc, PName, PLoc, ALoc, PosLocs, PredName, PosLoc),
-    get_check_props(Comp, comp, Pred, RtcComp),
+    get_check_props(Comp, comp, RelevantVars, RtcComp),
     ChkComp = i(PosLoc, PredName, Dict, RtcComp, CompNames, Exit).    
 
 comp_call_lit(comp(ChkCall, Call, Exit, _, _),
@@ -1000,7 +1035,8 @@ test_entry_body_goal(TestEntryBody, TestBodyGoal) :-
     TestInfo = testinfo(Pred, ABody, ADict, ASource, ALB, ALE),
     AsrLoc   = asrloc(loc(ASource, ALB, ALE)),
     assertion_body(Pred, DP, CP, AP, GP, _, ABody),
-    get_check_props(GP,comp,Pred,RtcGPProps),
+    varset(Pred, RelevantVars),
+    get_check_props(GP, comp, RelevantVars, RtcGPProps),
     %
     comps_to_goal(RtcGPProps, GPPropsGoal, GPPropsGoal0),
     %
@@ -1021,7 +1057,7 @@ test_entry_body_goal(TestEntryBody, TestBodyGoal) :-
     ( AP == [] ->
         APCheckGoal = GPCheckGoal
     ;
-        get_check_props(AP, success, Pred, CheckProps),
+        get_check_props(AP, success, RelevantVars, CheckProps),
         APChkLit = checkif(true, success, PredName, DictName, CheckProps, APName, [AsrLoc]),
         APCheckGoal = (GPCheckGoal, catch(APChkLit, Ex, throw(postcondition(Ex))))
     ),
@@ -1050,25 +1086,26 @@ clean_rtc_impl_db :-
 
 % ----------------------------------------------------------------------
 
-:- pred get_check_props(L1,Chk,Sg,L2) : list * term * term * var => list
-* term * term * list # "For every property from a list of property
+:- pred get_check_props(L1,Chk,Vars,L2) : list * term * list * var => list
+* term * list * list # "For every property from a list of property
 terms @var{L1} either add to @var{L2} a custom implementation of this
 property (e.g.  for run-time checks) if one exists or add the property
 term with no changes. @var{Chk} denotes which kind of run-time check
 it is coming from. Can be an @tt{atm} or @tt{var}.".
 
+get_check_props([],_,_,[]).
+get_check_props([Prop|Props],Check,RelevantVars,[RtcProp|RtcProps]) :-
+    get_check_prop(Prop,Check,RelevantVars,RtcProp),
+    get_check_props(Props,Check,RelevantVars,RtcProps).
 
-get_check_props(Props,Check,AssrtHead,RtcProps) :-
-    varset(AssrtHead, HeadVars),
-    get_check_props_(Props,Check,HeadVars,RtcProps).
-
-get_check_props_([],_,_,[]).
-get_check_props_([Prop|Props],Check,HeadVars,[RtcProp|RtcProps]) :-
-    get_check_prop(Prop,Check,HeadVars,RtcProp),
-    get_check_props_(Props,Check,HeadVars,RtcProps).
-
-
-
+get_check_prop(fails(_), ppassrt, _RelevantVars, RtcProp) :- !, % TODO: See other comp properties
+    RtcProp = fail.
+get_check_prop(mshare(Sh), ppassrt, RelevantVars, RtcProp) :- !, 
+    % Note that for program points, RelevantVars represent the list of all variables in the program point,
+    % rather than the head variables
+    get_check_prop(mshare(RelevantVars,Sh), ppassrt, RelevantVars, RtcProp).
+get_check_prop(Prop, ppassrt, RelevantVars, RtcProp) :- !, 
+    get_check_prop(Prop, calls, RelevantVars, RtcProp).
 get_check_prop(Prop, Type, _, RtcProp) :-
     (Type = calls ; Type = success),
     functor(Prop, F, A),
@@ -1090,9 +1127,9 @@ get_check_prop(Prop, comp, _, RtcProp) :-
 get_check_prop(mshare(Vs,Sh),_,_,rtc_mshare(Vs2,Sh2)) :- !,
     mshare_tr(Vs,Sh,Vs2,Sh2).
 
-get_check_prop(Prop,Check,HeadVars,RtcProp) :-
+get_check_prop(Prop,Check,RelevantVars,RtcProp) :-
     varset(Prop,PropVars),
-    intersect_vars(PropVars, HeadVars, PropArgs),
+    intersect_vars(PropVars, RelevantVars, PropArgs),
     get_check_prop_(Prop,Check,PropArgs,RtcProp).
 
 get_check_prop_(compat(Prop),_,Args,rtc_compat(Prop,Args)) :- !.
@@ -1122,8 +1159,14 @@ get_check_prop_(Prop,comp,_Args,Prop).
 mshare_tr(Vs,Sh,Vs2,Sh2) :- % list(var) * list(list(var)) * var * var
     copy_term(Vs-Sh,Vs0-Sh0),
     number_vars(Vs0,1),
-    sort(Sh0,Sh2),
+    sort_list(Sh0,Sh3),
+    sort(Sh3,Sh2),
     zip(Vs0,Vs,Vs2).
+
+sort_list([], []).
+sort_list([X|Xs], [Y|Ys]) :-
+    sort(X,Y),
+    sort_list(Xs, Ys).
 
 number_vars([N|Vs],N) :-
     N1 is N+1,

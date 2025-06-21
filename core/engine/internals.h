@@ -10,31 +10,43 @@
 
 extern intmach_t num_of_predicates;
 
-module_t *insert_module(sw_on_key_t **swp, tagged_t mod_atm, bool_t insertp);
+module_t *insert_module(hashtab_t **swp, tagged_t mod_atm, bool_t insertp);
 module_t *new_module(tagged_t mod_atm);
-void add_module(sw_on_key_t **swp, sw_on_key_node_t *node, tagged_t key, module_t *mod);
+void add_module(hashtab_t **swp, hashtab_node_t *node, tagged_t key, module_t *mod);
 
-definition_t *find_definition(sw_on_key_t **swp, tagged_t term, tagged_t **argl, bool_t insertp);
-definition_t *insert_definition(sw_on_key_t **swp, tagged_t tagpname, int arity, bool_t insertp);
-void add_definition(sw_on_key_t **swp, sw_on_key_node_t *node, tagged_t key, definition_t *def);
+definition_t *find_definition(hashtab_t **swp, tagged_t term, tagged_t **argl, bool_t insertp);
+definition_t *insert_definition(hashtab_t **swp, tagged_t tagpname, int arity, bool_t insertp);
+void add_definition(hashtab_t **swp, hashtab_node_t *node, tagged_t key, definition_t *def);
 definition_t *parse_definition(tagged_t complex);
 
 definition_t *new_functor(tagged_t tagpname, int arity);
 
-sw_on_key_node_t *incore_gethash(sw_on_key_t *sw, tagged_t key);
-sw_on_key_t *new_switch_on_key(intmach_t size, try_node_t *otherwise);
-void expand_sw_on_key(sw_on_key_t **psw, try_node_t *otherwise, bool_t deletep);
+hashtab_node_t *hashtab_get(hashtab_t *sw, tagged_t key);
+hashtab_t *new_switch_on_key(intmach_t size, try_node_t *otherwise);
+void expand_sw_on_key(hashtab_t **psw, try_node_t *otherwise, bool_t deletep);
 void leave_to_gc(enter_instr_t type, char *info);
 CBOOL__PROTO(empty_gcdef_bin);
 void relocate_gcdef_clocks(instance_clock_t *clocks);
 CBOOL__PROTO(prolog_abolish); /* JFMC */
+CBOOL__PROTO(prolog_abolish_multifile); /* JFMC */
 CBOOL__PROTO(abolish, definition_t *f); /* JFMC */
+CBOOL__PROTO(abolish_multifile, definition_t *f, tagged_t mod); /* JFMC */
 CBOOL__PROTO(define_predicate);
 CBOOL__PROTO(erase_clause);
-CBOOL__PROTO(clause_number);
 CBOOL__PROTO(compiled_clause);
-sw_on_key_node_t *dyn_puthash(sw_on_key_t **swp, tagged_t k);
+hashtab_node_t *hashtab_lookup(hashtab_t **swp, tagged_t k);
 CBOOL__PROTO(set_property);
+
+CBOOL__PROTO(stack_shift_usage);
+CBOOL__PROTO(termheap_usage);
+CBOOL__PROTO(envstack_usage);
+CBOOL__PROTO(choice_usage);
+CBOOL__PROTO(trail_usage);
+
+CBOOL__PROTO(gc_usage);
+CBOOL__PROTO(gc_mode);
+CBOOL__PROTO(gc_trace);
+CBOOL__PROTO(gc_margin);
 
 #define FLT64_ALIGNED_BLOB_SIZE (4*sizeof(tagged_t))
 
@@ -51,7 +63,6 @@ void init_goal_desc_list(void);
 void allow_thread_cancellation(void);
 void disallow_thread_cancellation(void);
 CFUN__PROTO(attach_me_to_goal_desc_list, goal_descriptor_t *);
-CVOID__PROTO(print_task_status);
 void make_goal_desc_free(goal_descriptor_t *goal);
 goal_descriptor_t *init_first_gd_entry(void);
 goal_descriptor_t *gimme_a_new_gd(void);
@@ -61,10 +72,10 @@ void enqueue_thread(THREAD_T thread);
 void unlink_wam(goal_descriptor_t *goal);
 uintmach_t num_tasks_created(void);
 
-CFUN__PROTO(cross_copy_term, tagged_t, tagged_t remote_term);
+CFUN__PROTO(cross_copy_term, tagged_t, tagged_t remote_term); /* term_basic.c */
 
 /* Support code for starting goal execution. */
-int call_firstgoal(goal_descriptor_t *firstworker, tagged_t goal_term);
+CFUN__PROTO(call_firstgoal, intmach_t, tagged_t goal, goal_descriptor_t *goal_desc);
 THREAD_RES_T startgoal(THREAD_ARG wo);
 THREAD_RES_T make_backtracking(THREAD_ARG wo);
 

@@ -71,7 +71,7 @@ static char workstring[WORKSTRINGLEN];
 /* read into ws (assume enough space) */
 static inline void getstring_ws(FILE *f, char *ws) {
   while ((*ws++ = GETC(f))) {
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
     if ((ws - workstring) > WORKSTRINGLEN) {
       SERIOUS_FAULT("workstring length exceeded");
     }
@@ -125,7 +125,7 @@ static CFUN__PROTO(qr_string, char *, FILE *f) {
  * bytecode.
  */
 
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
 #define DUMP_INSTR 1
 #endif
 
@@ -136,10 +136,6 @@ static CFUN__PROTO(qr_string, char *, FILE *f) {
 #else
 #define PTRdigits "8"
 #endif
-
-#define FuncName(Func) (SetArity((Func)->printname, 0))
-//#define FuncArity(Func) (Arity((Func)->printname))
-#define FuncArity(Func) ((Func)->arity)
 
 /* (for debugging) */
 #define TRACE_REWRITE(_)
@@ -155,7 +151,7 @@ static CFUN__PROTO(qr_string, char *, FILE *f) {
 
 #if defined(USE_REWRITE_BYTECODE) || defined(DUMP_INSTR)
 #include <ciao/absmachdef.h>
-#include <ciao/instrdefs.h>
+#include <ciao/instrdefs.h> /* BRANCH */
 #define FTYPE_name(ID) ftype_name[(intmach_t)(ID)]
 char *ftype_name[] = {
   [(intmach_t)FTYPE_id(f_o)]="o",
@@ -443,7 +439,7 @@ CFUN__PROTO(rewrite_instr, bcp_t, bcp_t p, bcp_t begin) {
         w->heap_top = h;
       });
       //      p = BCoff(p, BlobFunctorSizeAligned(*(tagged_t *)p)+sizeof(functor_t));
-      p = BCoff(p, BlobFunctorSizeAligned((tagged_t *)p));
+      p = BCoff(p, BlobFunctorSizeAligned(*(tagged_t *)p)+sizeof(functor_t));
       break;
     default:
       TRACE_REWRITE({ fprintf(stderr, "?"); });
@@ -605,7 +601,7 @@ CVOID__PROTO(dump_instr, bcp_t p) {
         w->heap_top = h;
       }
       fprintf(stderr, "%llx\n", *(tagged_t *)p);
-      p = BCoff(p, BlobFunctorSizeAligned((tagged_t *)p));
+      p = BCoff(p, BlobFunctorSizeAligned(*(tagged_t *)p)+sizeof(functor_t));
       break;
     default:
       fprintf(stderr, "?");
@@ -643,7 +639,7 @@ CVOID__PROTO(getbytecode32, FILE *f,
         int arity = 2;
         int amount = length + (4+arity)*sizeof(tagged_t);
         if (HeapCharDifference(w->heap_top,Heap_End)<amount) {
-          explicit_heap_overflow(Arg,amount,5);
+          explicit_heap_overflow(Arg,amount*2,5);
         }
       }
       h = w->heap_top;
@@ -693,6 +689,201 @@ CVOID__PROTO(getbytecode32, FILE *f,
 #if defined(USE_REWRITE_BYTECODE)
   CVOID__CALL(bytecode_rewrite, begin, P);
 #endif
+}
+
+/* --------------------------------------------------------------------------- */
+
+/* TODO: reuse for copying Large (see globalize_bn) */
+size_t compile_large(tagged_t t, bcp_t p) {
+  intmach_t i;
+  intmach_t ar = LargeArity(TaggedToHeadfunctor(t));
+  tagged_t *tp = TagpPtr(STR,t);
+  tagged_t *pp = (tagged_t *)p;
+
+  for (i = 0; i < ar; i++)
+    *pp++ = *tp++;
+  return ar*sizeof(tagged_t);
+}
+
+#if BC_SCALE==2
+/* Copy a large into bytecode, scaling if needed (see
+   bn_scale_bc32()) */
+size_t compile_large_bc32(tagged_t t, bcp_t p) {
+  intmach_t sz;
+  // fprintf(stderr, "trace: compile_large_bc32\n");
+  if (TaggedIsSmall(t)) {
+    /* Force into a large, even if it fits in a small */
+    // fprintf(stderr, "trace: bc32 large stored as small needs fix\n");
+    intmach_t i = GetSmall(t);
+    if (IsInSmiValRange_BC32(i)) {
+      SERIOUS_FAULT("compile_large_bc32: int32 found in large!");
+    }
+    tagged_t xx[2];
+    xx[0] = MakeFunctorFix;
+    xx[1] = i;
+    tagged_t t1 = Tagp(STR, xx);
+    (void)compile_large(t1, p);
+    sz = bn_scale_bc32((bignum_t *)p);
+  } else if (LargeIsFloat(t)) {
+    sz = compile_large(t, p);
+  } else {
+    (void)compile_large(t, p);
+    sz = bn_scale_bc32((bignum_t *)p);
+  }
+  return sz;
+}
+#endif
+
+CBOOL__PROTO(make_bytecode_object) {
+  tagged_t num,list;
+  emul_info_t *object;
+  bcp_t P;
+#if defined(GAUGE)
+  tagged_t num1;
+#endif
+  /*unsigned int counter_cnt;*/
+  /*intmach_t *current_counter;*/
+  /*int i;*/
+  intmach_t current_mem = total_mem_count;
+  intmach_t bsize;
+
+  DEREF(num,X(0));              /* Must be PHYSICAL size in characters! */
+#if defined(GAUGE)
+  DEREF(num1,X(1));             /* Number of Counters */
+#endif
+  DEREF(list,X(2));
+
+  bsize = TaggedToIntmach(num) * BC_SCALE;
+
+#if defined(GAUGE)
+  counter_cnt = TaggedToIntmach(num1);
+  checkalloc_FLEXIBLE_S(emul_info_t,
+                        objsize,
+                        char,
+                        (bsize + counter_cnt*sizeof(intmach_t)),
+                        object);
+#else
+  checkalloc_FLEXIBLE_S(emul_info_t,
+                        objsize,
+                        char,
+                        bsize,
+                        object);
+#endif
+
+  object->next = NULL;
+#if defined(GAUGE)
+  object->counters = (intmach_t *)((char *)object+object->objsize)-counter_cnt;
+  for (i=0; i<counter_cnt; i++)
+    object->counters[i] = 0;
+  current_counter = object->counters + 2; /* Entry Counters */
+#endif
+  P = (bcp_t)object->emulcode;
+  while (list!=atom_nil) {
+    tagged_t car;
+
+    DerefCar(car,list);
+    DerefCdr(list,list);
+    switch(TagOf(car)) {
+    case NUM: /* TODO: assumes that f_o, f_x, f_y, etc. have all the same size */
+      {
+        EMIT_o((FTYPE_ctype(f_o))GetSmall(car));
+        break;
+      }
+#if defined(GAUGE)
+    case ATM:
+      {
+        if (car == atom_counter) {
+          /* NOTE: this is a pointer */
+          EMITtok(f_counter, (char *)current_counter);
+          current_counter++;
+          --counter_cnt;
+        } else {
+          USAGE_FAULT("make_bytecode_object: bad spec");
+        }
+        break;
+      }
+#endif
+    case STR:
+      {
+        tagged_t func;
+        
+        func=TaggedToHeadfunctor(car);
+        if(func==functor_functor) {
+          /* functor(Name/Arity) */
+          DerefArg(car,car,1);
+          if (TaggedIsSTR(car) && (TaggedToHeadfunctor(car)==functor_slash)) {
+            tagged_t t1, t2;
+            DerefArg(t1,car,1);
+            DerefArg(t2,car,2);
+            EMIT_f(SetArity(t1,GetSmall(t2)));
+          }
+          break;
+        }
+        
+        if(func==functor_tagged) {
+          /* TAGGED(Term) */
+          tagged_t t;
+          DerefArg(t,car,1);
+          EMIT_t(t);
+          break;
+        }
+        if(func==functor_emul_entry) {
+          /* label(PredicateSpec) */
+          DerefArg(car,car,1);
+          EMIT_E(parse_definition(car));
+          break;
+        }
+        if(func==functor_builtin) {
+          /* builtin(Integer) */
+          tagged_t t1;
+          DerefArg(t1,car,1);
+          EMIT_C(builtintab[GetSmall(t1)]);
+          break;
+        }
+        if (func==functor_large) {
+          DerefArg(car,car,1);
+          int sz;
+#if BC_SCALE==2
+          sz = compile_large_bc32(car, P);
+#else
+          sz = compile_large(car, P);
+#endif
+          P = BCoff(P, sz);
+          break;
+        }
+        if(func==functor_long) {
+          /* long(Num) */
+          tagged_t t1;
+          DerefArg(t1,car,1);
+          EMIT_l(TaggedToIntmach(t1));
+          break;
+        }
+        USAGE_FAULT("make_bytecode_object: bad spec");
+      }
+    }
+  }
+
+  ptrdiff_t truesize = (char *)P - (char *)object->emulcode;
+  if (truesize > bsize) {
+    SERIOUS_FAULT("bug: memory overrun in make_bytecode_object()");
+  }
+
+/* TODO: rename by patch_bytecode32 */
+#if defined(BC64)
+#define USE_REWRITE_BYTECODE 1
+#endif
+#if defined(USE_REWRITE_BYTECODE)
+  CVOID__PROTO(bytecode_rewrite, bcp_t begin, bcp_t end);
+  CVOID__CALL(bytecode_rewrite, object->emulcode, P);
+#endif
+
+#if defined(GAUGE)
+  if (counter_cnt != 2)
+    SERIOUS_FAULT("$make_bytecode_object: counter counts don't match");
+#endif
+  CBOOL__UnifyCons(PointerToTerm(object),X(3));
+  INC_MEM_PROG(total_mem_count - current_mem);
+  CBOOL__PROCEED;
 }
 
 /* --------------------------------------------------------------------------- */
@@ -760,6 +951,11 @@ CBOOL__PROTO(push_qlinfo) {
   qloffset = qllimit>>1;
   qlarray = checkalloc_ARRAY(tagged_t, qllimit) + qloffset;
   
+#if defined(ABSMACH_OPT__regmod2)
+  ql_currmod = ERRORTAG;
+  //  fprintf(stderr, "set_currmod DISABLED\n");
+#endif
+
   return TRUE;
 }
 
@@ -773,6 +969,11 @@ CBOOL__PROTO(pop_qlinfo)
   qllimit = p->qllimit;
   qloffset = p->qloffset;
   checkdealloc_TYPE(qlinfo_t, p);
+
+#if defined(ABSMACH_OPT__regmod2)
+  ql_currmod = ERRORTAG;
+  // fprintf(stderr, "set_currmod DISABLED\n");
+#endif
 
   return TRUE;
 }
@@ -827,8 +1028,7 @@ static CVOID__PROTO(load_dbnode32,
   getbytecode32(Arg,f,(bcp_t)db->emulcode,codelength);
   latest_bytecode = db;  
   latest_bytecode_size = codelength;
-  db->next.ptr = NULL;
-  db->subdefs = NULL;
+  db->next = NULL;
 #if defined(GAUGE)
   db->counters = (intmach_t *)((char *)db+db->objsize)-counter_cnt;
   for (i=0; i<counter_cnt; i++)
@@ -912,7 +1112,7 @@ CBOOL__PROTO(qread1,
       pad = qr_int32(qfile);
       if (HeapCharDifference(h,Heap_End) < pad*sizeof(tagged_t)) {
         w->heap_top = h;
-        explicit_heap_overflow(Arg,pad*sizeof(tagged_t),2);
+        explicit_heap_overflow(Arg,pad*sizeof(tagged_t)*2,2);
         h = w->heap_top;
       }
       break;

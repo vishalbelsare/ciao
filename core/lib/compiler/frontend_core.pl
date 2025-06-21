@@ -38,7 +38,7 @@ do_load_compilation_module(_, File, Base) :-
     redo_decls(Base).
 
 % Translation hooks without module qualification is ambiguous.
-% (there is no explicit connection with load_compilaion_module)
+% (there is no explicit connection with load_compilation_module)
 check_qualified_hook(P, DeclF, DeclA, Ln0, Ln1) :-
     ( nonvar(P), P = (_:_) -> true
     ; error_in_lns(Ln0, Ln1, error,
@@ -255,6 +255,8 @@ normalize_meta_arg(':', goal).
 normalize_meta_arg(addmodule, addmodule(?)).
 normalize_meta_arg(addmodule(X), addmodule(Xn)) :-
     normalize_meta_arg(X, Xn).
+normalize_meta_arg(primitive(X), primitive(Xn)) :-
+    normalize_meta_arg(X, Xn).
 normalize_meta_arg(X, X) :- real_meta_arg(X).
 
 real_meta_arg(goal).
@@ -302,7 +304,9 @@ do_use_package_(F, _, _, Ln0, Ln1) :-
     compiler_error(Ln0, Ln1, bad_package_file(F)).
 
 package_file(F, P) :-
-    ( atom(F) -> P = library(F)
+    ( var(F) -> fail
+    ; atom(F) -> P = library(F)
+    ; F=(_/_) -> P = library(F)
     ; functor(F,_,1) -> P = F
     ).
 

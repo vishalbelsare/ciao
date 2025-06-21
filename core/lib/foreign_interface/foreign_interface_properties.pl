@@ -1,6 +1,6 @@
 :- module(foreign_interface_properties, [], [assertions, regtypes]).
 
-:- doc(title, "Foreign Language interface properties").
+:- doc(title, "Foreign language interface properties").
 
 :- doc(module, "The C foreign language interface uses some
    properties to specify linking regimes, foreign files to be
@@ -13,7 +13,7 @@
    properties available and a brief explanation of their meaning.
    Some of them can depend on the operating system and architecture,
    and can be selected stating it with an atom which represents that.
-   See @ref{C Foreign Language Interface} for a longer explanation and
+   See @ref{C Foreign language interface} for a longer explanation and
    some examples.").
 
 :- doc(author,"Jose F. Morales").
@@ -32,15 +32,15 @@
 :- impl_defined(use_foreign_source/1).
 :- endif.
 
-:- doc(doinclude,use_foreign_source/2).
-:- decl use_foreign_source(OsArch, Files) : atm * atm_or_atm_list
-   # "@var{Files} are the OS and architecture dependant foreign files.
-   This allows compiling and linking different files depending on the
-   O.S. and architecture.".
+:- doc(doinclude,use_foreign_gluecode_header/1).
+:- decl use_foreign_gluecode_header(Files) : atm_or_atm_list
+   # "@var{Files} is the (list of) alterantive headers that will be
+   included in the glue-code file (instead of the default
+   @tt{ciao_gluecode.h}).".
 :- if(defined(optim_comp)).
-:- '$props'(use_foreign_source/2, [impnat=indefinable]).
+:- '$props'(use_foreign_gluecode_header/1, [impnat=indefinable]).
 :- else.
-:- impl_defined(use_foreign_source/2).
+:- impl_defined(use_foreign_gluecode_header/1).
 :- endif.
 
 :- doc(doinclude,use_foreign_library/1).

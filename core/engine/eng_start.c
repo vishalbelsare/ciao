@@ -6,37 +6,8 @@
  *  See Copyright Notice in ciaoengine.pl
  */
 
-#if defined(_WIN32) || defined(_WIN64) /* MinGW */
-//#include <winsock2.h>
-#include <windows.h>
-#endif
-
-#include <string.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <ctype.h>
-#include <time.h>
-#include <sys/stat.h>
-#include <sys/param.h>
-
 #include <ciao/eng.h>
-
-#if !(defined(__svr4__) || defined(DARWIN) || defined(BSD))
-#include <sys/types.h>
-#include <malloc.h>
-#endif
-#include <assert.h>
-
-#if defined(DARWIN) /* for get_execpath() */
-#include <stdint.h>
-#include <limits.h>
-#include <mach-o/dyld.h>
-#endif
-
-#if defined(Win32) && !(defined(_WIN32) || defined(_WIN64)) /* MSYS2/Cygwin */
-#include <sys/cygwin.h>
-#endif
-
+#if !defined(OPTIM_COMP)
 #include <ciao/basiccontrol.h>
 #include <ciao/internals.h>
 #include <ciao/eng_registry.h>
@@ -44,13 +15,31 @@
 #include <ciao/qread.h>
 #include <ciao/eng_profile.h>
 #include <ciao/timing.h>
+#endif
+#include <ciao/os_defs.h>
 
-#if !defined(MAXPATHLEN)
-# define MAXPATHLEN 1024
+#if defined(_WIN32) || defined(_WIN64) /* MinGW */
+//#include <winsock2.h>
+#include <windows.h>
 #endif
-#if !defined(X_OK)
-# define X_OK 1
+#if defined(Win32) && !(defined(_WIN32) || defined(_WIN64)) /* MSYS2/Cygwin */
+#include <sys/cygwin.h>
 #endif
+
+#include <time.h> /* tzset() */
+#include <string.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <limits.h>
+
+#if defined(DARWIN) /* for get_execpath() */
+#include <mach-o/dyld.h>
+#endif
+
+/* --------------------------------------------------------------------------- */
+/* Check size and encoding of some C types */
+
+#include <assert.h>
 
 union dbl {
   flt64_t as_flt;
@@ -58,9 +47,7 @@ union dbl {
 };
 static union dbl fzero = { .as_flt = 0.0 };
 
-/* Check size of C types */
-void checkctypes(void)
-{
+void checkctypes(void) {
   /* tagged_t must be large enough to encode pointers */
   assert(sizeof(tagged_t) == sizeof(tagged_t *));
   /* checks for 64-bit floats */
@@ -68,7 +55,7 @@ void checkctypes(void)
   assert((fzero.as_int[0]==0 && fzero.as_int[1]==0));
 }
 
-/* local declarations */
+/* --------------------------------------------------------------------------- */
 
 #define USAGE_STRING "Usage: %s [prolog_args] -C [-i] [-q] [-v] -b bootfile\n"
 
@@ -85,6 +72,8 @@ char *c_headers_directory = NULL;
 
 int eng_stub_length = 0; /* length of engine executable stub */
 bool_t quiet_flag_bool;
+
+bool_t expand_file_name(const char *name, bool_t abs, char *target);
 
 CVOID__PROTO(load_ql_files, FILE *qfile)
 {
@@ -108,24 +97,71 @@ static void open_exec_skip_stub(const char *file, FILE **stream) {
   if (eng_stub_length == 0) {
     goto usage;
   }
-
-  if (!access(file, X_OK)) {
-    struct stat data;
-    stat(file,&data);
-    if (data.st_size == eng_stub_length) goto usage;
-    if ((*stream = fopen(file,"rb")) == NULL) {
-      fprintf(stderr,"%s: unable to open for read\n", file);
-      engine_exit(1);
-    }
-    fseek(*stream, eng_stub_length, SEEK_SET);
-    return;
+#if defined(_WIN32) || defined(_WIN64)
+  /* X_OK is not valid in some Windows/MinGW versions */
+  if (access(file, F_OK) != 0) { *stream = NULL; return; }
+#else
+  if (access(file, X_OK) != 0) { *stream = NULL; return; }
+#endif
+  struct stat data;
+  stat(file,&data);
+  if (data.st_size == eng_stub_length) goto usage;
+  *stream = fopen(file,"rb");
+  if (*stream == NULL) {
+    fprintf(stderr,"%s: unable to open for read\n", file);
+    engine_exit(1);
   }
-  *stream = NULL;
+  fseek(*stream, eng_stub_length, SEEK_SET);
   return;
-
  usage:
   fprintf(stderr, USAGE_STRING, file);
   engine_exit(1);
+}
+
+extern char *ciao_suffix;
+
+CBOOL__PROTO(load_boot, const char *boot_path, const char *exec_path) {
+  FILE *qfile = NULL;
+  
+  if (boot_path == NULL) {
+    /* No source path -- try to open the executable itself and seek
+       the file to skip the engine executable stub, where embedded
+       bytecode should start */
+    open_exec_skip_stub(exec_path, &qfile);
+    if (qfile == NULL) { 
+      fprintf(stderr,"%s: file not found\n", exec_path);
+      CBOOL__FAIL;
+    }
+    expand_file_name(exec_path,TRUE,source_path);
+  } else {
+    expand_file_name(boot_path,TRUE,source_path);
+#if defined(Win32)
+    int i = strlen(source_path)-4;
+    if (i > 0 && strcmp(source_path+i,".bat") == 0){
+      int j;
+      for (j = 1; ciao_suffix[j] && (i+j < MAXPATHLEN); j++) {
+        source_path[i+j] = ciao_suffix[j];
+      }
+    } else if (i > 0 && strcmp(source_path+i, ciao_suffix) != 0) {
+      strcat(source_path, ciao_suffix);
+    }
+
+    if (access(source_path,R_OK)) {
+      source_path[strlen(source_path)-4] = '\0'; /* Take out ciao_suffix (.cpx) */
+    }
+#endif
+    qfile = fopen(source_path,"rb");
+    if (qfile == NULL) {
+      fprintf(stderr, "%s: boot file not found\n", source_path);
+      CBOOL__FAIL;
+    }
+  }
+
+  /* We have a bootfile we can read from */
+  CVOID__CALL(load_ql_files, qfile);
+  fclose(qfile);
+
+  CBOOL__PROCEED;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -149,8 +185,6 @@ void init_winsock2(void) {
 
 extern char cwd[];
 
-extern char *ciao_suffix;
-
 void ciao_initcode(void); /* initialize foreign interface definitions */
 
 void eng_stub_set_length(int len) {
@@ -162,76 +196,39 @@ static void guess_win32_env(const char *boot_path,
                             const char *emulator);
 #endif
 
-bool_t expand_file_name(const char *name, bool_t abs, char *target);
-
 /* Process engine options after "-C" argument */
+/* TODO: locate -C backwards */
 void engine_set_opts(const char **optv, int optc, const char **boot_path) {
   int i;
-  
   quiet_flag_bool = FALSE;
-
   for (i = 0; i < optc; i++) {
-    if (strcmp(optv[i],"-b") == 0) /* TODO: optim_comp does not use -b */
+    if (strcmp(optv[i],"-b") == 0) { /* TODO: optim_comp does not use -b */
       *boot_path = optv[++i];
-    else if (strcmp(optv[i],"-i") == 0)
+    } else if (strcmp(optv[i],"-i") == 0) {
       interactive_flag_bool = TRUE;
-    else if (strcmp(optv[i],"-q") == 0)             /* To make quiet */
+    } else if (strcmp(optv[i],"-q") == 0) { /* To make quiet */
       quiet_flag_bool = TRUE;
-    else if (strcmp(optv[i],"-v") == 0)           /* To make verbose */
+    } else if (strcmp(optv[i],"-v") == 0) { /* To make verbose */
       quiet_flag_bool = FALSE;
-    /*
-      else if (strcmp(optv[i],"-L") == 0){    
-      #if defined(Win32)
-      ciaoroot_directory = checkalloc_ARRAY(char, MAXPATHLEN+1);
-      expand_file_name(optv[++i],TRUE,ciaoroot_directory);
-      #else
-      ciaoroot_directory = optv[++i];
-      #endif
-      }
-    */
-    else
-#if defined(PROFILE)
-      if (strcmp(optv[i], "--profile") == 0)        /* Simple profile */
-        profile_eng = TRUE;
-      else if (strcmp(optv[i], "--profile-time") == 0)         /* Include time */
-        profile_eng = TRUE;
-    /* {profile_eng = TRUE; prof_include_time = TRUE;} */
-      else
+#if defined(ABSMACH_OPT__profilecc) || defined(ABSMACH_OPT__profile_calls)
+    } else if (profile__get_opt(optv[i])) { /* Profile option */
 #endif
-        if (strcmp(optv[i], "--trace-calls") == 0) /* Trace predicate calls */
-          trace_calls = TRUE;
-#if defined(DEBUG)
-        else if (strcmp(optv[i], "--trace-instr") == 0) /* Trace instructions */
-          trace_instr = TRUE;
-        else if (strcmp(optv[i], "--debug-chpt") == 0)  /*debug regular choicepoints*/
-          debug_choicepoints = TRUE;
-        else if (strcmp(optv[i], "--debug-conc-chpt") == 0) /*conc. choicepoints*/
-          debug_concchoicepoints = TRUE;
-        else if (strcmp(optv[i], "--debug-threads") == 0)           /* debug threads */
-          debug_threads = TRUE;
-        else if (strcmp(optv[i], "--debug-gc") == 0)      /* debug garb. coll. */
-          debug_gc = TRUE;
-        else if (strcmp(optv[i], "--debug-mem") == 0)       /* debug mem. man. */
-          debug_mem = TRUE;
-        else if (strcmp(optv[i], "--debug-conc") == 0)    /* debug concurrency */
-          debug_conc = TRUE;
-        else if (strcmp(optv[i],"--debug-dynlink") == 0)
-          debug_dynlink = TRUE;
+#if defined(DEBUG_TRACE)
+    } else if (debug_trace__get_opt(optv[i])) { /* Debug trace option */
 #endif
-        else if (strcmp(optv[i], "-C") != 0)  /* Ignore other "-C" */
-          fprintf(stderr,"Warning: %s ignored\n",optv[i]);
+    } else if (strcmp(optv[i], "-C") != 0) { /* Ignore other "-C" */
+      fprintf(stderr,"Warning: %s ignored\n",optv[i]);
+    }
   }
-#if defined(PROFILE)
-  if (profile||trace_calls) stop_on_pred_calls = TRUE;
-#else
-  if (trace_calls) stop_on_pred_calls = TRUE;
-#endif
 }
 
 void set_ciaoroot_directory(const char *boot_path, const char *exec_path);
 
 void compute_cwd(void);
 char *c_find_exec(const char *cmd);
+
+void init_profile(void);
+CVOID__PROTO(finish_profile);
 
 void engine_init(const char *boot_path, const char *exec_path) {
   checkctypes();
@@ -248,7 +245,7 @@ void engine_init(const char *boot_path, const char *exec_path) {
 
   init_timing();
 
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
   RESET_COUNTER;
 #endif
 
@@ -260,6 +257,8 @@ void engine_init(const char *boot_path, const char *exec_path) {
   /*init_wrb_state_list();*/
   init_goal_desc_list();
   init_once();
+  init_profile();
+  /*init_worker_entry_table();*/
   init_some_bytecode();
   current_quiet_flag = quiet_flag_bool ? atom_on : atom_off;
   /*mem_prog_count = 0;*/
@@ -268,28 +267,35 @@ void engine_init(const char *boot_path, const char *exec_path) {
   glb_init_each_time();
 }
 
-/* Get executable path (when argv[0] is not reliable) */
-char *get_execpath(void) {
-  char buffer[MAXPATHLEN+1];
-  size_t size = MAXPATHLEN+1;
-#if defined(LINUX)
+static bool_t get_execpath_(char *buffer, size_t size) {
+#if defined(LINUX)/*||defined(EMSCRIPTEN)*/
   ssize_t len;
-  if ((len = readlink("/proc/self/exe", buffer, size)) == -1) return NULL;
+  len = readlink("/proc/self/exe", buffer, size);
+  return (len != -1);
 #elif defined(DARWIN)
   uint32_t len = size;
-  if (_NSGetExecutablePath(buffer, &len) == -1) return NULL;
+  return (_NSGetExecutablePath(buffer, &len) != -1);
 #elif defined(_WIN32) || defined(_WIN64) /* MinGW */
-  if (GetModuleFileName(NULL, buffer, size) == 0) return NULL;
+  return (GetModuleFileName(NULL, buffer, size) != 0);
 #else
-  return NULL;
+  return FALSE;
   /* TODO: Missing support for other OS:
       - Solaris: getexecname()
       - FreeBSD: sysctl CTL_KERN KERN_PROC KERN_PROC_PATHNAME -1
       - BSD with procfs: readlink /proc/curproc/file
   */
 #endif
+}
+
+/* Get executable path (when argv[0] is not reliable) */
+char *get_execpath(void) {
+  char buffer[MAXPATHLEN];
+  size_t size = MAXPATHLEN;
+  if (!get_execpath_(buffer, size)) return NULL;
   return strdup(buffer);
 }
+
+goal_descriptor_t *default_goal_desc;
 
 int engine_start(int argc, char **argv) {
   int i;
@@ -338,54 +344,25 @@ int engine_start(int argc, char **argv) {
   /* Initialize the engine */
   engine_init(boot_path, exec_path);
 
-  /* Load boot */
-  FILE *qfile = NULL;
-  
-  if (boot_path == NULL) {
-    /* No source path -- try to open the executable itself and seek
-       the file to skip the engine executable stub, where embedded
-       bytecode should start */
-    open_exec_skip_stub(exec_path, &qfile);
-    if (qfile == NULL) { 
-      fprintf(stderr,"%s: file not found\n", exec_path);
-      return 1;
-    }
-    expand_file_name(exec_path,TRUE,source_path);
-  } else {
-    expand_file_name(boot_path,TRUE,source_path);
-#if defined(Win32)
-    i = strlen(source_path)-4;
-    if (i > 0 && strcmp(source_path+i,".bat") == 0){
-      int j;
-      for (j = 1; ciao_suffix[j] && (i+j < MAXPATHLEN); j++) {
-        source_path[i+j] = ciao_suffix[j];
-      }
-    } else if (i > 0 && strcmp(source_path+i, ciao_suffix) != 0) {
-      strcat(source_path, ciao_suffix);
-    }
-
-    if (access(source_path,R_OK)) {
-      source_path[strlen(source_path)-4] = '\0'; /* Take out ciao_suffix (.cpx) */
-    }
-#endif
-    qfile = fopen(source_path,"rb");
-    if (qfile == NULL) {
-      fprintf(stderr, "%s: boot file not found\n", source_path);
-      return 1;
-    }
-  }
-
-  /* We have a bootfile we can read from */
   /* Make the first wam.  We need it to load the ql's. Main thread
      is always goal # 0 */
-  goal_descriptor_t *first_goal;
-  first_goal = init_first_gd_entry();
-  load_ql_files(first_goal->worker_registers, qfile);
-  fclose(qfile);
-  /* wam->next_insn set to boot code in local_init_each_time */
-  /*w->choice->heap_top = w->heap_top;*/     /* Isn't this unnecessary? */
-  /*  Fills in worker_entry */
-  return call_firstgoal(first_goal, GET_ATOM("internals:boot"));
+  /* TODO: merge with OPTIM_COMP and avoid duplicated code with ciao_prolog.c */
+  default_goal_desc = init_first_gd_entry();
+
+  /* Load boot */
+  WITH_WORKER(default_goal_desc->worker_registers, {
+    if (CBOOL__SUCCEED(load_boot, boot_path, exec_path)) {
+      intmach_t i;
+      /* wam->next_insn set to boot code in local_init_each_time */
+      /*w->choice->heap_top = w->heap_top;*/     /* Isn't this unnecessary? */
+      /*  Fills in worker_entry */
+      i = CFUN__EVAL(call_firstgoal, GET_ATOM("internals:boot"), default_goal_desc);
+      return i;
+    } else {
+      return 1;
+    }
+  });
+  return 0;
 }
 
 // #define USE_WINDOWS_REGISTRY 1
@@ -400,7 +377,7 @@ void set_ciaoroot_directory(const char *boot_path, const char *exec_path) {
 #if defined(_WIN32) || defined(_WIN64)
 #warning "TODO(MinGW): check that normalize path of ciaoroot_directory is ok"
     const char *aux = ciaoroot_directory;
-    ciaoroot_directory = checkalloc_ARRAY(char, MAXPATHLEN+1);
+    ciaoroot_directory = checkalloc_ARRAY(char, MAXPATHLEN);
     expand_file_name(aux,TRUE,ciaoroot_directory);
 #endif
   } else if (ciaoroot_directory == NULL) {
@@ -413,9 +390,9 @@ void set_ciaoroot_directory(const char *boot_path, const char *exec_path) {
       /* These are for the Windows registry */
       HKEY SOFTWAREKey, CiaoPrologKey;
       DWORD buffer_size = MAXPATHLEN;
-      char aux[MAXPATHLEN+1];
+      char aux[MAXPATHLEN];
 
-      ciaoroot_directory = checkalloc_ARRAY(char, MAXPATHLEN+1);
+      ciaoroot_directory = checkalloc_ARRAY(char, MAXPATHLEN);
      
       if (( RegOpenKeyEx(HKEY_LOCAL_MACHINE, TEXT("SOFTWARE"), 0, KEY_READ,
                          &SOFTWAREKey) == ERROR_SUCCESS ) &&
@@ -467,7 +444,7 @@ void set_ciaoroot_directory(const char *boot_path, const char *exec_path) {
 #if defined(_WIN32) || defined(_WIN64)
 #warning "TODO(MinGW): check that normalize path of c_headers_directory is ok"
     const char *aux = c_headers_directory;
-    c_headers_directory = checkalloc_ARRAY(char, MAXPATHLEN+1);
+    c_headers_directory = checkalloc_ARRAY(char, MAXPATHLEN);
     expand_file_name(aux,TRUE,c_headers_directory);
 #endif
   } else { /* c_headers_directory == NULL */
@@ -495,7 +472,7 @@ int setenv(const char *name, const char *value, int overwrite);
 static void guess_win32_env(const char *boot_path,
                             const char *exec_path) {
   static const char *shexe = "/sh.exe";
-  char path[MAXPATHLEN+1];
+  char path[MAXPATHLEN];
 
   /* Try guessing value for binary path */
   char *binpath = NULL;
@@ -563,18 +540,16 @@ static void guess_win32_env(const char *boot_path,
 }
 #endif
 
-#if defined(PROFILE)
-void end_profiler(void);
-#endif
-
-void engine_finish(void) {
-#if defined(PROFILE)
-  end_profiler();
-#endif
+CVOID__PROTO(engine_finish) {
+  CVOID__CALL(finish_profile);
   fflush(NULL);
 }
 
 void engine_exit(int result) {
-  engine_finish();
+  if (default_goal_desc != NULL) {
+    WITH_WORKER(default_goal_desc->worker_registers, {
+      CVOID__CALL(engine_finish);
+    });
+  }
   exit(result);
 }

@@ -2,310 +2,282 @@
  *  term_basic.c
  *
  *  Copyright (C) 1996-2002 UPM-CLIP
- *  Copyright (C) 2020 The Ciao Development Team
+ *  Copyright (C) 2020-2024 The Ciao Development Team
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-
 #include <ciao/eng.h>
+#if !defined(OPTIM_COMP)
 #include <ciao/basiccontrol.h>
-#include <ciao/instrdefs.h> /* TODO: required? */
-#include <ciao/dynamic_rt.h>
-#include <ciao/dtoa_ryu.h>
-#include <ciao/eng_start.h>
-#include <ciao/eng_registry.h>
 #include <ciao/eng_gc.h>
-#include <ciao/rt_exp.h>
-#include <ciao/runtime_control.h>
-#include <ciao/io_basic.h>
-#include <ciao/eng_bignum.h>
+#include <ciao/eng_bignum.h> /* bn_positive */
+#endif
 
 /* Unify with occurs-check, using inline checks (var-nonvar cases) */
 #define UNIFY_OC_INLINE 1
 /* Enable tail optimization in cyclic_term */
 #define CYCLIC_TERM_TAIL_OPTIM 1
+/* Enable copying of terms between different heaps in copy_term */
+/* (it does not have any significant impact on performance) */
+#define SAFE_CROSS_COPY 1
 
-/* local declarations */
+/* --------------------------------------------------------------------------- */
 
-#define GCTEST(Pad) { \
-    if (HeapCharDifference(w->heap_top,Heap_End) < (Pad)*sizeof(tagged_t)) \
-      heap_overflow(Arg,(Pad)*sizeof(tagged_t)); \
-    if (ChoiceDifference(w->choice,w->trail_top) < (Pad)) \
-      choice_overflow(Arg,Pad); \
-  }
-
-static CVOID__PROTO(copy_it, tagged_t *loc);
-static CVOID__PROTO(copy_it_nat, tagged_t *loc);
-
-/* -------------------------------------------------------------------
-   FRAME MANIPULATIONS
-   ----------------------------------------------------------------------*/
-
-CVOID__PROTO(pop_frame)
-{
-  tagged_t *pt1;
-
-  SetE(w->frame);
-  {
-    int arity;
-
-    arity = FrameSizeToCount(FrameSize(w->next_insn));
-    {
-      int i;
-
-      for(i=0; i<arity; i++) X(i) = Y(i);
-    }
-  }
-  w->local_top = E;
-  w->frame = E->frame;
-  w->next_insn = E->next_insn;
-}
-
-/* this assumes w->local_top has been computed! */
-CVOID__PROTO(push_frame, int arity)
-{
-  tagged_t *pt1;
-  int i;
-
-  SetE(w->local_top);
-  E->next_insn = w->next_insn;
-  E->frame = w->frame;
-  w->frame = E;
-  w->next_insn = CONTCODE(arity);
-  w->local_top = (frame_t *)Offset(E,EToY0+arity);
-  for(i=0; i<arity; i++)
-    Y(i) = X(i);
-}
+/* Detect if a variable is old during copy_term */
+#if defined(SAFE_CROSS_COPY)
+/* Use w->global_uncond as a memory barrier
+   *and* OnHeap (for safe cross copy_term, since we cannot not assume
+   anything about the order of different heaps */
+#if defined(PARBACK) || defined(ANDPARALLEL)
+// TODO: CondHVA and CondCVA already check heap/stack boundaries
+#define OldHVA(X) CondHVA((X))
+#define OldCVA(X) CondCVA((X))
+#else
+#define OldHVA(X) (CondHVA((X)) || !OnHeap(TaggedToPointer(X)))
+#define OldCVA(X) (CondCVA((X)) || !OnHeap(TaggedToPointer(X)))
+#endif
+#else
+/* Use w->global_uncond as a memory barrier */
+#define OldHVA(X) CondHVA((X))
+#define OldCVA(X) CondCVA((X))
+#endif
 
 /* --------------------------------------------------------------------------- */
 /* copy term */
 
-/* copy_term(?Old,?New):
- * Algorithm:
- * If Old is a plain variable, just return.
- * Otherwise allocate a frame containing Old and New.
- * The frame slot for Old will be progressively replaced by a copy of Old.
- * Thus all relevant parts of the old and new structures are reachable from
- * the frame slot, should GC occur.
- * While copying, all old variables encountered are bound to their copies.
- * This requires a choicepoint.
- * Finally untrail but trail any new CVA:s, deallocate frame & choicept,
- * and unify copy with New.
- */
-CBOOL__PROTO(prolog_copy_term) {
-  tagged_t t1, t2, *pt1, *pt2;
+/* copy_term(?Old,?New) implements this algorithm:
 
-  t1 = X(0);
-  SwitchOnVar(t1,t2,
-              { return TRUE; },
-              {},
-              { return TRUE; },
-              {});
+   - If Old is a plain variable, just return.
+   - Allocate a choicepoint (to create a memory barrier, as we'll see later,
+     to distinguish new and old variables).
+   - Allocate a frame containing Old and New (for keeping GC roots).
+   - Progressively replace the frame slot for Old with a copy (CopyTerm##__it).
+   - While copying, all old variables encountered are bound to their copies.
+   - Finally untrail but trail any new CVA:s, deallocate frame & choicept,
+     and unify copy with New.
 
-  X(0) = t1;
-  push_choicept(Arg,fail_alt);  /* try, arity=0 */
-  push_frame(Arg,2);            /* allocate, size=2 */
+  Different versions of copy_term w.r.t. attributes:
 
-  copy_it(Arg,&w->frame->term[0]); /* do the copying */
+   - copy_term/2: Make a copy of the attributes (recursively):
 
-  pt1 = pt2 = TaggedToPointer(w->choice->trail_top); /* untrail */
-  while (TrailYounger(w->trail_top,pt2)) {
-    t1 = *pt2; /* old var */
-    pt2++;
-    *TaggedToPointer(t1) = t1;
-  }
-  w->trail_top = pt1;
+   ?- attach_attribute(X, fobar(W,W)), copy_term(f(X,X,W,W), Z).
+   Z = f(_A,_A,_B,_B),
+   X attributed fobar(W,W),
+   _A attributed fobar(_B,_B) ? 
+    
+   - copy_term_nat/2: Do not copy attributes (equivalent to make a copy and remove attributes?)
 
-  pop_frame(Arg);
-  pop_choicept(Arg);            /* trust */
-  CBOOL__LASTUNIFY(X(0),X(1));
+   ?- attach_attribute(X, fobar(W,W)), copy_term_nat(f(X,X,W,W), Z).
+   Z = f(_A,_A,_B,_B),
+   X attributed fobar(W,W) ? 
+    
+   - copy_term_shattr/2: Share all attributed variables:
+
+   ?- attach_attribute(X, fobar(W,W)), copy_term_shattr(f(X,X,W,W), Z).
+   Z = f(X,X,_A,_A),
+   X attributed fobar(W,W) ? 
+*/
+
+/* TODO: make it work with cyclic terms */
+
+// TODO:[oc-merge] can w->global_uncond be other heap pointer?
+// generalize for other uses?
+
+/* In copy_term used as a heap pointer whose relative position
+   w.r.t. the newly created term is invariant in the presence of
+   GC. Note that it requires the code to be surrounded by
+   push_choicept/pop_choicept. */
+#define TopOfOldHeap w->global_uncond
+#if defined(OPTIM_COMP)
+#define GetRelPtrOldHeap(X) HeapCharDifference(TopOfOldHeap,(X))
+#define GetAbsPtr(X) HeapCharOffset(TopOfOldHeap,(X))
+#else
+#define GetRelPtrOldHeap(X) HeapDifference(TopOfOldHeap,(X))
+#define GetAbsPtr(X) HeapOffset(TopOfOldHeap,(X))
+#endif
+
+/* TODO:[arity-limit] all GCTEST should happen before arity loops */
+#if defined(OPTIM_COMP)
+// TODO:[oc-merge] 2* was missing in OC
+#define GCTEST(Pad) { \
+  if (HeapCharAvailable(G->heap_top) < (Pad)) \
+    CVOID__CALL(heap_overflow,2*(Pad)); \
+  if (ChoiceCharDifference(w->choice,G->trail_top) < (Pad)) \
+    CVOID__CALL(choice_overflow,(Pad),TRUE); \
+}
+#else
+#define GCTEST(Pad) { \
+  if (HeapCharDifference(G->heap_top,Heap_End) < (Pad)*sizeof(tagged_t)) \
+    CVOID__CALL(heap_overflow,2*((Pad)*sizeof(tagged_t))); \
+  if (ChoiceDifference(w->choice,G->trail_top) < (Pad)) \
+    CVOID__CALL(choice_overflow,2*(Pad)*sizeof(tagged_t),TRUE); \
+}
+#endif
+
+#define TMPL_copy_term(CopyTerm, ROOT_CVA, COPY_CVA) \
+static CVOID__PROTO(CopyTerm##__it, tagged_t *loc); \
+CBOOL__PROTO(CopyTerm) { \
+  tagged_t t1 = X(0); \
+  /* returning now is equivalent to unify X(1) with a fresh variable */ \
+  DerefSw_HVA_CVA_SVA_Other(t1,{ \
+    CBOOL__PROCEED; \
+  }, { \
+    ROOT_CVA; \
+  }, { \
+    CBOOL__PROCEED; \
+  }, { \
+  }); \
+  /* otherwise, create a choicept+frame and start copying */ \
+  X(0) = t1; \
+  CVOID__CALL(push_choicept,fail_alt); /* try, arity=0 */ \
+  CVOID__CALL(push_frame,2); /* allocate, size=2 */ \
+  CVOID__CALL(CopyTerm##__it,&G->frame->x[0]); /* do the copying */ \
+  UntrailVals(); /* untrail */ \
+  CVOID__CALL(pop_frame); /* X(0) is now the copy! */ \
+  CVOID__CALL(pop_choicept); \
+  CBOOL__LASTUNIFY(X(0),X(1)); \
+} \
+\
+/* create a copy of the term located at 'loc' */ \
+static CVOID__PROTO(CopyTerm##__it, tagged_t *loc) { \
+  tagged_t t1, *pt1, *pt2; \
+  arity_t i; \
+  intmach_t pt2rel; \
+\
+ start: \
+  t1 = *loc; \
+  HeapDerefSw_HVA_CVA_NUMorATM_LST_STR(t1,{ /* HVA */ \
+    if (OldHVA(t1)) { \
+      *loc = Tagp(HVA, loc); \
+      tagged_t t2 = Tagp(HVA, loc); \
+      BindHVA(t1,t2); \
+      return; \
+    } else { \
+      goto keep_old; \
+    } \
+  }, { /* CVA */ \
+    COPY_CVA; \
+  }, { /* NUM ATM */ \
+    goto keep_old; \
+  }, { /* LST */ \
+    pt1 = TagpPtr(LST,t1); \
+    pt2 = G->heap_top; \
+    *loc = Tagp(LST,pt2); \
+    goto copy_2_cells; \
+  }, { /* STR */ \
+    SwStruct(hf, t1, { /* STR(blob) */ \
+      /* TODO: fixme, cross copy term requires copying the blob */ \
+      goto keep_old; \
+    },{ /* STR(struct) */ \
+      /* copy the structure (first with same arguments) */ \
+      pt1 = TaggedToArg(t1,1); \
+      pt2 = G->heap_top; \
+      *loc = Tagp(STR,pt2); \
+      HeapPush(pt2,hf); \
+      for (i=Arity(hf); i>0; --i) { \
+        t1 = *pt1; \
+        pt1++; \
+        HeapPush(pt2,t1); \
+      } \
+      G->heap_top = pt2; \
+      /* now make copies for each of them */ \
+      pt2rel = GetRelPtrOldHeap(pt2); \
+      GCTEST(CHOICEPAD); \
+      for (i=Arity(hf); i>1; --i) { \
+        CVOID__CALL(CopyTerm##__it,GetAbsPtr(pt2rel)-i); \
+      } \
+      goto last_arg; \
+    }); \
+  }); \
+  return; \
+ keep_old: \
+  *loc = t1; \
+  return; \
+ copy_2_cells: \
+  /* special case for 2 cells (LST or CVA) */ \
+  t1 = *pt1; \
+  pt1++; \
+  HeapPush(pt2,t1); \
+  t1 = *pt1; \
+  pt1++; \
+  HeapPush(pt2,t1); \
+  G->heap_top = pt2; \
+  pt2rel = GetRelPtrOldHeap(pt2); \
+  GCTEST(CHOICEPAD); \
+  CVOID__CALL(CopyTerm##__it, G->heap_top - 2); \
+  goto last_arg; \
+ last_arg: \
+  GCTEST(CHOICEPAD); \
+  /* (tail call) */ \
+  loc = GetAbsPtr(pt2rel)-1; \
+  goto start; \
 }
 
-static CVOID__PROTO(copy_it, tagged_t *loc) {
-  tagged_t t1, t2, *pt1, *pt2;
-  int i;
-  int term_so_far;              /* size of new heap before copying subterms */
-
- start:
-  RefHeap(t1,loc);
-  SwitchOnHeapVar(t1,t2,{goto copy_hva;},{goto copy_cva;},{});
-
-  if (TaggedIsATM(t1) || IsNumber(t1)) {                           /* NUM, ATM */
-    *loc = t1;
-    return;
-  } else if (t1 & TagBitFunctor) {                                 /* STR */
-    pt1 = TagpPtr(STR,t1);
-    pt2 = w->heap_top;
-    *loc = Tagp(STR,pt2);
-    t2 = HeapNext(pt1), HeapPush(pt2,t2);
-    for (i=Arity(t2); i>0; --i) {
-      RefHeapNext(t1,pt1);
-      HeapPush(pt2,t1);
-    }
-    w->heap_top = pt2;
-    term_so_far = HeapDifference(TopOfOldHeap,pt2);
-    GCTEST(CHOICEPAD);
-    for (i=Arity(t2); i>1; --i)
-      copy_it(Arg,HeapOffset(TopOfOldHeap,term_so_far-i));
-  } else {                                                         /* LST */
-    pt1 = TagpPtr(LST,t1);
-    pt2 = w->heap_top;
-    *loc = Tagp(LST,pt2);
-  copy_2_cells:
-    RefHeapNext(t1,pt1);
-    HeapPush(pt2,t1);
-    RefHeapNext(t1,pt1);
-    HeapPush(pt2,t1);
-    w->heap_top = pt2;
-    term_so_far = HeapDifference(TopOfOldHeap,pt2);
-    GCTEST(CHOICEPAD);
-    copy_it(Arg,HeapOffset(w->heap_top,-2));
-  }
-  GCTEST(CHOICEPAD);
-  loc = HeapOffset(TopOfOldHeap,term_so_far-1);
-  goto start;
-
- copy_hva:
-  if (OldHVA(t1)) { /* HVA */
-    PreLoadHVA(*loc,loc);
-    t2 = Tagp(HVA,loc);
-    BindHVA(t1,t2);
-  } else *loc = t1;
-  return;
-
- copy_cva:
+/* copy_term/2 */
+TMPL_copy_term(prolog_copy_term, {}, {
   if (OldCVA(t1)) { /* new 3-field CVA */
+    tagged_t t2;
     pt1 = TaggedToGoal(t1);
-    pt2 = w->heap_top;
+    pt2 = G->heap_top;
     LoadCVA(t2,pt2);
     BindCVANoWake(t1,t2);
     *loc = t2;
     goto copy_2_cells;
-  } else *loc = t1;
-  return;
-}
-
-/* Do not copy attributes */
-CBOOL__PROTO(prolog_copy_term_nat)
-{
-  tagged_t t1, t2, *pt1, *pt2;
-
-  t1 = X(0);
-  SwitchOnVar(t1,t2,
-              { return TRUE; },
-              { return TRUE; },
-              { return TRUE; },
-              {});
-
-  X(0) = t1;
-  push_choicept(Arg,fail_alt);  /* try, arity=0 */
-  push_frame(Arg,2);            /* allocate, size=2 */
-
-  copy_it_nat(Arg,&w->frame->term[0]); /* do the copying */
-
-  pt1 = pt2 = TaggedToPointer(w->choice->trail_top); /* untrail */
-  while (TrailYounger(w->trail_top,pt2)) {
-    t1 = *pt2; /* old var */
-    pt2++;
-    *TaggedToPointer(t1) = t1;
+  } else {
+    goto keep_old;
   }
-  w->trail_top = pt1;
+});
 
-  pop_frame(Arg);
-  pop_choicept(Arg);            /* trust */
-  CBOOL__LASTUNIFY(X(0),X(1));
-}
-
-
-static CVOID__PROTO(copy_it_nat, tagged_t *loc)
-{
-  tagged_t t1, t2, *pt1, *pt2;
-  int i;
-  int term_so_far;              /* size of new heap before copying subterms */
-
- start:
-  RefHeap(t1,loc);
-  SwitchOnHeapVar(t1,t2,{goto copy_hva;},{goto skip_cva;},{});
-
-  if (TaggedIsATM(t1) || IsNumber(t1)) {                           /* NUM, ATM */
-    *loc = t1;
-    return;
-  } else if (t1 & TagBitFunctor) {                                 /* STR */
-    pt1 = TagpPtr(STR,t1);
-    pt2 = w->heap_top;
-    *loc = Tagp(STR,pt2);
-    t2 = HeapNext(pt1), HeapPush(pt2,t2);
-    for (i=Arity(t2); i>0; --i) {
-      RefHeapNext(t1,pt1);
-      HeapPush(pt2,t1);
-    }
-    w->heap_top = pt2;
-    term_so_far = HeapDifference(TopOfOldHeap,pt2);
-    GCTEST(CHOICEPAD);
-    for (i=Arity(t2); i>1; --i)
-      copy_it_nat(Arg,HeapOffset(TopOfOldHeap,term_so_far-i));
-  } else {                                                         /* LST */
-    pt1 = TagpPtr(LST,t1);
-    pt2 = w->heap_top;
-    *loc = Tagp(LST,pt2);
-    RefHeapNext(t1,pt1);
-    HeapPush(pt2,t1);
-    RefHeapNext(t1,pt1);
-    HeapPush(pt2,t1);
-    w->heap_top = pt2;
-    term_so_far = HeapDifference(TopOfOldHeap,pt2);
-    GCTEST(CHOICEPAD);
-    copy_it_nat(Arg,HeapOffset(w->heap_top,-2));
-  }
-  GCTEST(CHOICEPAD);
-  loc = HeapOffset(TopOfOldHeap,term_so_far-1);
-  goto start;
-
- copy_hva:
-  if (OldHVA(t1)) { /* HVA */
-    PreLoadHVA(*loc,loc);
-    t2 = Tagp(HVA,loc);
-    BindHVA(t1,t2);
-  } else *loc = t1;
-  return;
-
- skip_cva:
+// TODO:[oc-merged] keep both versions?
+#if defined(OPTIM_COMP)
+// TODO:[oc-merged] check if it is still needed
+/* copy_term_shattr/2: like copy_term/2 but share attributed variables
+   (JFMC) */
+TMPL_copy_term(prolog_copy_term_shattr, {}, ({
+  goto keep_old;
+}));
+#else
+/* Do not copy attributes (CVA) */
+/* (equivalent to taking out the attributes from the copy) */
+TMPL_copy_term(prolog_copy_term_nat, {
+  CBOOL__PROCEED; /* CVA on root, do nothing */
+}, {
   if (OldCVA(t1)) {
     /* This code is equivalent to taking out the attribute;
        xref bu1_detach_attribute() */
-    PreLoadHVA(*loc,loc);
-    t2 = Tagp(HVA,loc);
+    *loc = Tagp(HVA,loc);
+    tagged_t t2 = Tagp(HVA,loc);
     BindCVANoWake(t1,t2);
-  } else  *loc = t1;
-  return;
-}
+    return;
+  } else {
+    goto keep_old;
+  }
+});
+#endif
+
+/* ------------------------------------------------------------------------- */
 
 #if defined(SAFE_CROSS_COPY)
-
-CBOOL__PROTO(prolog_copy_term); /* term_basic.c */
-
 /* Copy a term in a remote worker to the local worker.  Returns the local
    term pointer.  It has (nontermination) problems when copying structures
    with self references. */
 
-CFUN__PROTO(cross_copy_term, tagged_t, tagged_t remote_term)
-{
-  X(0) = remote_term;
-  LoadHVA(X(1), w->heap_top);
-#if defined(DEBUG)
-  if (!prolog_copy_term(Arg))
-    fprintf(stderr, "Could not copy term in cross_copy_term!!!!\n");
-#else
-  prolog_copy_term(Arg);
-#endif
-  return X(1);
-}
+// TODO: see bugs/Pending/cross_copy_term/README.txt
+//  - blobs are not copied across heaps!
 
+CFUN__PROTO(cross_copy_term, tagged_t, tagged_t remote_term) {
+  bool_t ok MAYBE_UNUSED;
+  X(0) = remote_term;
+  LoadHVA(X(1), G->heap_top);
+  ok = CBOOL__SUCCEED(prolog_copy_term);
+  RTCHECK({
+    /* TODO: raise an exception! */
+    if (!ok) fprintf(stderr, "Could not copy term in cross_copy_term!!!!\n");
+  });
+  CFUN__PROCEED(X(1));
+}
 #endif
 
 /* --------------------------------------------------------------------------- */
-
 /* c_cyclic_term: checks that the term t is cyclic.
 
    Calls c_cyclic_ptr with the reference of a tagged word, using GC
@@ -333,13 +305,13 @@ static CVOID__PROTO(unmark_rightmost_branch, tagged_t *ptr);
 
 static CBOOL__PROTO(c_cyclic_term, tagged_t t) {
   tagged_t *ptr;
-  int i;
+  arity_t i;
 
   switch(TagOf(t)){
   case SVA:
   case HVA:
   case CVA:
-    return c_cyclic_ptr(Arg, TaggedToPointer(t));
+    CBOOL__LASTCALL(c_cyclic_ptr, TaggedToPointer(t));
   case LST: 
     ptr = TagpPtr(LST,t);
     i = 2;
@@ -347,102 +319,103 @@ static CBOOL__PROTO(c_cyclic_term, tagged_t t) {
   case STR:
     ptr = TagpPtr(STR,t);
     t = *ptr;
-    if (t&QMask) return FALSE; /* large number */
+    if (FunctorIsBlob(t)) CBOOL__FAIL; /* large number */
     i = Arity(t);
     ptr++;
     goto args;
   default:
-    return FALSE;
+    CBOOL__FAIL;
   }
  args:
   for (; i >= 1; i--, ptr++) {
-    if (c_cyclic_ptr(Arg, ptr)) return TRUE;
+    if (CBOOL__SUCCEED(c_cyclic_ptr, ptr)) CBOOL__PROCEED;
   }
-  return FALSE;
+  CBOOL__FAIL;
 }
 
 CBOOL__PROTO(c_cyclic_ptr, tagged_t *pt) {
-  tagged_t t;
-  tagged_t *ptr, *ptr1;
-  int i;
-
-  ptr = pt;
+  tagged_t *ptr1;
+  arity_t i;
+  TG_Let(ptr, pt);
  start:
-  t = *ptr;
-  switch(TagOf(t)){
+  TG_Fetch(ptr);
+  switch(TagOf(TG_Val(ptr))){
   case SVA:
   case HVA:
   case CVA:
-    ptr = TaggedToPointer(t);
-    if (*ptr == t) goto acyclic; /* free variable */
+    ptr = TaggedToPointer(TG_Val(ptr));
+    if (*ptr == TG_Val(ptr)) goto acyclic; /* free variable */
     goto start;
   case LST: 
-    if (gc_IsMarked(t)) goto cyclic;
-    ptr1 = TagpPtr(LST,t);
+    if (TG_IsM(ptr)) goto cyclic;
+    ptr1 = TagpPtr(LST,TG_Val(ptr));
     i = 2;
     goto args;
   case STR:
-    if (gc_IsMarked(t)) goto cyclic;
-    ptr1 = TagpPtr(STR,t);
-    t = *ptr1;
-    if (t&QMask) goto acyclic;  /* large number */
-    i = Arity(t);
-    ptr1++;
-    goto args;
+    if (TG_IsM(ptr)) goto cyclic;
+    ptr1 = TagpPtr(STR,TG_Val(ptr));
+    tagged_t hf = *ptr1;
+    if (FunctorIsBlob(hf)) {
+      goto acyclic; /* large number */
+    } else {
+      i = Arity(hf);
+      ptr1++;
+      goto args;
+    }
   default:
     goto acyclic;
   }
  args:
-  gc_MarkM(*ptr); /* mark cell */
+  TG_SetM(ptr); /* mark cell */
 #if defined(CYCLIC_TERM_TAIL_OPTIM)
   for (; i > 1; i--, ptr1++) {
-    if (c_cyclic_ptr(Arg, ptr1)) goto cyclic;
+    if (CBOOL__SUCCEED(c_cyclic_ptr, ptr1)) goto cyclic;
   }
   ptr = ptr1;
   goto start;
 #else
   for (; i >= 1; i--, ptr1++) {
-    if (c_cyclic_ptr(Arg, ptr1)) { gc_UnmarkM(*ptr); goto cyclic; }
+    if (CBOOL__SUCCEED(c_cyclic_ptr, ptr1)) { TG_UnsetM(ptr); goto cyclic; }
   }
   /* acyclic */
-  gc_UnmarkM(*ptr);
+  TG_UnsetM(ptr);
   goto acyclic;
 #endif
 
  acyclic:
 #if defined(CYCLIC_TERM_TAIL_OPTIM)
-  unmark_rightmost_branch(Arg, pt); /* ensure marks are removed */
+  CVOID__CALL(unmark_rightmost_branch, pt); /* ensure marks are removed */
 #endif
-  return FALSE;
+  CBOOL__FAIL;
  cyclic:
 #if defined(CYCLIC_TERM_TAIL_OPTIM)
-  unmark_rightmost_branch(Arg, pt); /* ensure marks are removed */
+  CVOID__CALL(unmark_rightmost_branch, pt); /* ensure marks are removed */
 #endif
-  return TRUE;
+  CBOOL__PROCEED;
 }
 
 #if defined(CYCLIC_TERM_TAIL_OPTIM)
-CVOID__PROTO(unmark_rightmost_branch, tagged_t *ptr) {
-  tagged_t t;
+CVOID__PROTO(unmark_rightmost_branch, tagged_t *ptr0) {
+  TG_Let(ptr, ptr0);
 
  start:
-  t = *ptr;
-  switch(TagOf(t)){
+  TG_Fetch(ptr);
+  switch(TagOf(TG_Val(ptr))){
   case SVA:
   case HVA:
   case CVA:
-    ptr = TaggedToPointer(t);
-    if (*ptr == t) return;
+    ptr = TaggedToPointer(TG_Val(ptr));
+    if (*ptr == TG_Val(ptr)) return;
     goto start;
   case LST: 
-    if (!gc_IsMarked(t)) return;
-    gc_UnmarkM(*ptr);
+    if (!TG_IsM(ptr)) return;
+    TG_UnsetM(ptr);
     ptr = TagpPtr(LST,*ptr);
     ptr++;
     goto start;
   case STR:
-    if (!gc_IsMarked(t)) return;
-    gc_UnmarkM(*ptr);
+    if (!TG_IsM(ptr)) return;
+    TG_UnsetM(ptr);
     ptr = TagpPtr(STR,*ptr);
     ptr += Arity(*ptr);
     goto start;
@@ -452,11 +425,11 @@ CVOID__PROTO(unmark_rightmost_branch, tagged_t *ptr) {
 }
 #endif
 
-CBOOL__PROTO(prolog_cyclic_term)
-{
-  return c_cyclic_term(Arg, X(0));
+CBOOL__PROTO(prolog_cyclic_term) {
+  CBOOL__LASTCALL(c_cyclic_term, X(0));
 }
 
+/* --------------------------------------------------------------------------- */
 /* unifiable(Term1, Term2, Unifier)
  *
  * Algortihm: tries unify Term1 and Term2, then untrail the
@@ -464,36 +437,35 @@ CBOOL__PROTO(prolog_cyclic_term)
  * eventually unified with Unifier. The function treats attributed 
  * variable as classical ones.
  */
-CBOOL__PROTO(prolog_unifiable)
-{
+CBOOL__PROTO(prolog_unifiable) {
   tagged_t t, t1;
   tagged_t * limit, *tr;
 
   /* Forces trailing of bindings and saves the top of the trail. */
-  push_choicept(Arg,fail_alt);  
+  CVOID__CALL(push_choicept,fail_alt);  
   /* Saves the arguments in case of GC. */
-  push_frame(Arg,3); /* TODO: frame args used? */
+  CVOID__CALL(push_frame,3);
 
   CBOOL__UNIFY(X(0), X(1));
 
   /* Makes sure there is enough place in the heap to construct the
      unfiers list. */
-  GCTEST((w->trail_top - TaggedToPointer(w->choice->trail_top)) * 5);
+  GCTEST((G->trail_top - TrailTopUnmark(w->choice->trail_top)) * 5);
 
   t = atom_nil;
-  tr = w->trail_top;
-  limit = TaggedToPointer(w->choice->trail_top);
+  tr = G->trail_top;
+  limit = TrailTopUnmark(w->choice->trail_top);
    
   while (TrailYounger(tr, limit)) {
     TrailDec(tr);
     t1 = *tr; // (tr points to the popped element)
 
-    HeapPush(w->heap_top, SetArity(atom_equal, 2));
-    HeapPush(w->heap_top, t1);
-    HeapPush(w->heap_top, *TaggedToPointer(t1));
-    HeapPush(w->heap_top, Tagp(STR, HeapOffset(w->heap_top, -3)));
-    HeapPush(w->heap_top, t);
-    t = Tagp(LST, HeapOffset(w->heap_top, -2));
+    HeapPush(G->heap_top, SetArity(atom_equal, 2));
+    HeapPush(G->heap_top, t1);
+    HeapPush(G->heap_top, *TaggedToPointer(t1));
+    HeapPush(G->heap_top, Tagp(STR, G->heap_top - 3));
+    HeapPush(G->heap_top, t);
+    t = Tagp(LST, G->heap_top - 2);
 
     *TaggedToPointer(t1) = t1;
   }
@@ -502,9 +474,9 @@ CBOOL__PROTO(prolog_unifiable)
      variables */ 
   if (TestEvent()) UnsetEvent(); /* TODO: check */
   
-  w->trail_top = limit;
-  pop_frame(Arg);
-  pop_choicept(Arg);    
+  G->trail_top = limit;
+  CVOID__CALL(pop_frame);
+  CVOID__CALL(pop_choicept);    
 
   CBOOL__LASTUNIFY(X(2), t);
 }  
@@ -518,27 +490,26 @@ static CBOOL__PROTO(var_occurs, tagged_t v, tagged_t x1);
 
 static CBOOL__PROTO(var_occurs_args_aux, 
                     tagged_t v,
-                    int arity,
+                    arity_t arity,
                     tagged_t *pt1,
                     tagged_t *x1) {
-  tagged_t 
-    t1 = ~0;
+  tagged_t t1 = ~0;
   for (; arity>0; --arity) {
     t1 = *pt1;
-    if (arity > 1 && var_occurs(Arg,v,t1)) return TRUE;
-    (void)HeapNext(pt1);
+    if (arity > 1 && CBOOL__SUCCEED(var_occurs,v,t1)) CBOOL__PROCEED;
+    pt1++;
   }
   *x1 = t1;
-  return FALSE;
+  CBOOL__FAIL;
 }
 
 static CBOOL__PROTO(var_occurs, tagged_t v, tagged_t x1) {
-  tagged_t u, t1;
+  tagged_t u;
 
  in:
   u=x1;
 
-  SwitchOnVar(u,t1,
+  DerefSw_HVA_CVA_SVA_Other(u,
               { goto var; },
               { goto var; },
               { goto var; },
@@ -548,15 +519,17 @@ static CBOOL__PROTO(var_occurs, tagged_t v, tagged_t x1) {
   if (TaggedIsATM(u)) goto lose;
   if (TaggedIsSmall(u)) goto lose;
   if (TaggedIsLST(u)) {
-    if (!var_occurs_args_aux(Arg,v,2,TaggedToCar(u),&x1))
+    if (!CBOOL__SUCCEED(var_occurs_args_aux,v,2,TaggedToCar(u),&x1)) {
       goto in;
-    else
+    } else {
       goto win;
+    }
   } else { /* structure. */
+    tagged_t t1;
     t1=TaggedToHeadfunctor(u);
-    if (t1&QMask) { /* large number */
-          goto lose;
-    } if (!var_occurs_args_aux(Arg,v,Arity(t1),TaggedToArg(u,1),&x1)) {
+    if (FunctorIsBlob(t1)) { /* large number */
+      goto lose;
+    } if (!CBOOL__SUCCEED(var_occurs_args_aux,v,Arity(t1),TaggedToArg(u,1),&x1)) {
       goto in;
     } else {
       goto win;
@@ -567,9 +540,9 @@ static CBOOL__PROTO(var_occurs, tagged_t v, tagged_t x1) {
   if (v == u) goto win; else goto lose;
 
  win:
-  return TRUE;
+  CBOOL__PROCEED;
  lose:
-  return FALSE;
+  CBOOL__FAIL;
 }
 #endif
 
@@ -578,7 +551,7 @@ static CBOOL__PROTO(var_occurs, tagged_t v, tagged_t x1) {
 
 #if defined(UNIFY_OC_INLINE)
 static CBOOL__PROTO(cunifyOC_args_aux,
-                    int arity, tagged_t *pt1, tagged_t *pt2,
+                    arity_t arity, tagged_t *pt1, tagged_t *pt2,
                     tagged_t *x1, tagged_t *x2);
 static CBOOL__PROTO(cunifyOC_aux, tagged_t x1, tagged_t x2);
 
@@ -588,54 +561,79 @@ static CBOOL__PROTO(cunifyOC_aux, tagged_t x1, tagged_t x2);
  * arity - number of arguments.
  */
 CBOOL__PROTO(cunifyOC_args, 
-             int arity,
+             arity_t arity,
              tagged_t *pt1,
              tagged_t *pt2) {
   tagged_t x1, x2;
-  return (cunifyOC_args_aux(Arg,arity,pt1,pt2,&x1,&x2) && cunifyOC_aux(Arg,x1,x2));
+  return (CBOOL__SUCCEED(cunifyOC_args_aux,arity,pt1,pt2,&x1,&x2) && CBOOL__SUCCEED(cunifyOC_aux,x1,x2));
 }
 
+// TODO:[oc-merge] which one is right?
+#if defined(OPTIM_COMP)
+#define UNIF_DerefVar HeapDerefSw_HVAorCVA_Other
+#else
+#define UNIF_DerefVar DerefSw_HVAorCVAorSVA_Other
+#endif
+
 static CBOOL__PROTO(cunifyOC_args_aux, 
-                    int arity,
+                    arity_t arity,
                     tagged_t *pt1,
                     tagged_t *pt2,
                     tagged_t *x1,
                     tagged_t *x2) {
   tagged_t t1 = ~0;
   tagged_t t2 = ~0;
-  tagged_t t3;
 
-  if (ChoiceYounger(ChoiceOffset(w->choice,2*CHOICEPAD-w->value_trail),w->trail_top)) {
-    /* really: < 2*arity */
-    choice_overflow(Arg,2*CHOICEPAD);
-  }
+#if defined(OPTIM_COMP)
+  VALUETRAIL__TEST_OVERFLOW(CHOICEPAD);
+#else
+  VALUETRAIL__TEST_OVERFLOW(2*CHOICEPAD);
+#endif
   for (; arity>0; --arity) {
     t1 = *pt1;
     t2 = *pt2;
     if (t1 != t2) {
-      DerefHeapSwitch(t1,t3,{ goto noforward; });
-      DerefHeapSwitch(t2,t3,{ goto noforward; });
-      if (t1!=t2 && IsComplex(t1&t2)) {
-        /* NOTE: do forward args from pt2 to pt1 */ 
-      noforward:
-        if (arity>1 && !cunifyOC_aux(Arg,t1,t2))
-          return FALSE;
-      } else if (t1 != t2) {
-        return FALSE;
+      UNIF_DerefVar(t1, { goto noforward; }, {});
+      UNIF_DerefVar(t2, { goto noforward; }, {});
+      if (t1!=t2) {
+        Sw_2xLSTorSTR_Other(t1, t2, { /* LST or STR */
+          /* NOTE: do forward args from pt2 to pt1 */ 
+          goto noforward;
+        }, {
+          CBOOL__FAIL;
+        });
+      } else { 
+        goto next;
       }
+    noforward:
+      if (arity>1 && !CBOOL__SUCCEED(cunifyOC_aux,t1,t2))
+        CBOOL__FAIL;
+      goto next;
     }
-    (void)HeapNext(pt1);
-    (void)HeapNext(pt2);
+  next:
+    pt1++;
+    pt2++;
   }
 
   *x1 = t1;
   *x2 = t2;
 
-  if (ChoiceYounger(ChoiceOffset(w->choice,CHOICEPAD-w->value_trail),w->trail_top))
-    choice_overflow(Arg,CHOICEPAD);
-  return TRUE;
+#if !defined(OPTIM_COMP) // TODO:[oc-merge] needed?
+  VALUETRAIL__TEST_OVERFLOW(CHOICEPAD);
+#endif
+  CBOOL__PROCEED;
 }
 #endif 
+
+#if defined(OPTIM_COMP) // TODO:[oc-merge] merge oc macros (they are different, assume same tags, more efficient?)
+#define YoungerHVA(U,V) YoungerHeapVar((U),(V))
+#define YoungerCVA(U,V) YoungerHeapVar((U),(V))
+#define YoungerSVA(U,V) YoungerStackVar((U),(V))
+#else
+#define YoungerHVA(U,V) YoungerHeapVar(TagpPtr(HVA,(U)),TagpPtr(HVA,(V)))
+#define YoungerCVA(U,V) YoungerHeapVar(TagpPtr(CVA,(U)),TagpPtr(CVA,(V)))
+#define YoungerSVA(U,V) YoungerStackVar(TagpPtr(SVA,(U)),TagpPtr(SVA,(V)))
+#endif
 
 /* Unify two terms. (with occurs-checks)
  * x1 - first term
@@ -652,7 +650,7 @@ CBOOL__PROTO(cunifyOC, tagged_t x1, tagged_t x2) {
      the first algorithm depending on cost of cyclic term checks,
      e.g., f(X,X,X)=f(...,...,...) redoes work for each arg */
   CBOOL__UNIFY(x1,x2);
-  if (CBOOL__SUCCEED(c_cyclic_term, x1)) return FALSE;
+  if (CBOOL__SUCCEED(c_cyclic_term, x1)) CBOOL__FAIL;
   CBOOL__PROCEED;
 #endif
 }
@@ -662,507 +660,525 @@ CBOOL__PROTO(cunifyOC, tagged_t x1, tagged_t x2) {
   { if (CBOOL__SUCCEED(var_occurs, (U), (V))) { OCCUR; } }
 
 static CBOOL__PROTO(cunifyOC_aux, tagged_t x1, tagged_t x2) {
-  tagged_t u, v, t1;
+  tagged_t u, v;
 
  in:
-  u=x1, v=x2;
+  u=x1;
+  v=x2;
 
-  SwitchOnVar(u,t1,
+  DerefSw_HVA_CVA_SVA_Other(u,
               {goto u_is_hva;},
               {goto u_is_cva;},
               {goto u_is_sva;},
               {});
 
-                                /* one non variable */
-  SwitchOnVar(v,t1,
+  /* one non variable */
+  DerefSw_HVA_CVA_SVA_Other(v,
               { OccurCheck(v,u,{goto lose;}); BindHVA(v,u); goto win; },
               { OccurCheck(v,u,{goto lose;}); BindCVA(v,u); goto win; },
               { OccurCheck(v,u,{goto lose;}); BindSVA(v,u); goto win; },
               {});
 
-                                /* two non variables */
-  if (!(v ^= u)) {              /* are they equal? */
+  /* two non variables */
+  if (u == v) { /* are they equal? */
     goto win;
-  } else if (v>=QMask) {                /* not the same type? */
+  } else if (!TaggedSameTag(u, v)) { /* not the same type? */
     goto lose;
-  } else if (!(u & TagBitComplex)) { /* atomic? (& not LNUM)*/
-    goto lose;
-  } else if (!(u & TagBitFunctor)) { /* list? */
-    v ^= u;                     /* restore v */
-    if (cunifyOC_args_aux(Arg,2,TaggedToCar(u),TaggedToCar(v),&x1,&x2)) {
+  } else {
+    Sw_NUMorATM_LST_STR(u, { /* NUM ATM */
+      goto lose; /* fail */
+    }, {
+      /* LST x LST */
+      CBOOL__CALL(cunifyOC_args_aux,2,TaggedToCar(u),TaggedToCar(v),&x1,&x2);
       goto in;
-    } else {
-      goto lose;
-    }
-  } else {                              /* structure. */
-    v ^= u;                     /* restore v */
-    if (TaggedToHeadfunctor(u) != (t1=TaggedToHeadfunctor(v))) {
-      goto lose;
-    } else if (t1&QMask) {      /* large number */
-      int i;
-        
-      for (i = LargeArity(t1)-1; i>0; i--)
-        if (*TaggedToArg(u,i) != *TaggedToArg(v,i)) goto lose;
-      goto win;
-    }
-    if (cunifyOC_args_aux(Arg,Arity(t1),TaggedToArg(u,1),TaggedToArg(v,1),&x1,&x2)) {
-      goto in;
-    } else {
-      goto lose;
-    }
+    }, {
+      /* STR x STR */
+      tagged_t t1 = TaggedToHeadfunctor(v);
+      if (TaggedToHeadfunctor(u) != t1) {
+        goto lose;
+      } else {
+        if (FunctorIsBlob(t1)) { /* STRBlob x STRBlob */
+#if defined(OPTIM_COMP)
+          CBOOL__TEST(compare_blob(TagpPtr(STR, u), TagpPtr(STR, v)));
+#else
+          for (int i = LargeArity(t1)-1; i>0; i--) {
+            if (*TaggedToArg(u,i) != *TaggedToArg(v,i)) CBOOL__FAIL;
+          }
+#endif
+          goto win;
+        } else { /* STRStruct x STRStruct */
+          CBOOL__CALL(cunifyOC_args_aux, Arity(t1), TaggedToArg(u,1), TaggedToArg(v,1), &x1, &x2);
+          goto in;
+        }
+      }
+    });
   }
 
  u_is_hva:
-  SwitchOnVar(v,t1, {
-      if (u==v) {
-      } else if (YoungerHeapVar(TagpPtr(HVA,v),TagpPtr(HVA,u))) {
-        BindHVA(v,u);
-      } else {
-        BindHVA(u,v); 
-      } 
-    }, {
-      BindHVA(u,v);
-    }, {
-      BindSVA(v,u);
-    }, {
-      OccurCheck(u,v,{goto lose;}); BindHVA(u,v);
-    });
+  DerefSw_HVA_CVA_SVA_Other(v, {
+    if (u==v) {
+    } else if (YoungerHVA(v, u)) {
+      BindHVA(v,u);
+    } else {
+      BindHVA(u,v); 
+    } 
+  }, {
+    BindHVA(u,v);
+  }, {
+    BindSVA(v,u);
+  }, {
+    OccurCheck(u,v,{goto lose;});
+    BindHVA(u,v);
+  });
   goto win;
 
  u_is_cva:
-  SwitchOnVar(v,t1, {
-      BindHVA(v,u);
-    }, { if (u==v) {
-      } else if (YoungerHeapVar(TagpPtr(CVA,v),TagpPtr(CVA,u))) {
-        BindCVA(v,u);
-      } else {
-        BindCVA(u,v); 
-      } 
-    }, {
-      BindSVA(v,u);
-    }, {
-      OccurCheck(u,v,{goto lose;}); BindCVA(u,v);
-    });
+  DerefSw_HVA_CVA_SVA_Other(v, {
+    BindHVA(v,u);
+  }, {
+    if (u==v) {
+    } else if (YoungerCVA(v,u)) {
+      BindCVA(v,u);
+    } else {
+      BindCVA(u,v); 
+    } 
+  }, {
+    BindSVA(v,u);
+  }, {
+    OccurCheck(u,v,{goto lose;});
+    BindCVA(u,v);
+  });
   goto win;
 
  u_is_sva:
-  for (; TaggedIsSVA(v); v = t1) {
-    RefSVA(t1,v);
-    if (v == t1) {
-      if (u==v) {
-      } else if (YoungerStackVar(TagpPtr(SVA,v),TagpPtr(SVA,u))) {
-        BindSVA(v,u);
-      } else {
-        BindSVA(u,v);
+  { tagged_t t1;
+    for (; TaggedIsSVA(v); v = t1) {
+      t1 = *TagpPtr(SVA,v);
+      if (v == t1) {
+        if (u==v) {
+        } else if (YoungerSVA(v,u)) {
+          BindSVA(v,u);
+        } else {
+          BindSVA(u,v);
+        }
+        goto win;
       }
-      goto win;
     }
   }
-  OccurCheck(u,v,{ goto lose; }); BindSVA(u,v);
+  OccurCheck(u,v,{ goto lose; });
+  BindSVA(u,v);
 
  win:
-  return TRUE;
+  CBOOL__PROCEED;
 
  lose:
-  return FALSE;
+  CBOOL__FAIL;
 }
 #endif
 
 CBOOL__PROTO(prolog_unifyOC) {
-  return cunifyOC(Arg, X(0), X(1));
+  CBOOL__LASTCALL(cunifyOC, X(0), X(1));
 }
 
-/* ------------------------------------------------------------------------- */
+/* --------------------------------------------------------------------------- */
 
-/*
-CFUN__PROTO(fu2_arg, tagged_t, tagged_t number, tagged_t complex) {  
+#define USE_FU2_ARG_EXCEPTIONS 1 /* ISO compatibility */
+// TODO: deprecate old behavior
+
+CFUN__PROTO(fu2_arg, tagged_t, tagged_t number, tagged_t term) {
+#if defined(USE_FU2_ARG_EXCEPTIONS)
   ERR__FUNCTOR("term_basic:arg", 3);
-  CIAO_REG_1(tagged_t, t0);
-  intmach_t i;
 
-  DerefSwitch(number,t0, BUILTIN_ERROR(INSTANTIATION_ERROR, number, 1););
-  DerefSwitch(complex,t0, BUILTIN_ERROR(INSTANTIATION_ERROR, complex, 2););
-
-  if (TaggedIsSmall(number)) i = GetSmall(number);
-  else if (TaggedIsLarge(number) && !LargeIsFloat(number)) return FALSE;
-  else BUILTIN_ERROR(TYPE_ERROR(INTEGER), number, 1);
-
-  if (i < 0)
-    BUILTIN_ERROR(DOMAIN_ERROR(NOT_LESS_THAN_ZERO), number, 1);
-
-  if (TaggedIsSTR(complex))
-    {
-      tagged_t f = TaggedToHeadfunctor(complex);
-
-      if (i == 0 || i > Arity(f) || f&QMask) return FALSE;
-
-      t0 = *TaggedToArg(complex,i);
-      return t0;
+  intval_t i;
+  DerefSw_HVAorCVAorSVA_Other(number, {
+    BUILTIN_ERROR(ERR_instantiation_error, number, 1);
+  }, {
+    Sw_NUM_Large_Other(number, {
+      i = GetSmall(number);
+    }, {
+      /* large number, saturate to max arity plus 1 so that we can
+         continue checking the other arguments */
+      i = MAXARITY1 + 1;
+    }, {
+      BUILTIN_ERROR(ERR_type_error(integer), number, 1);
+    });
+    if (i < 0) {
+      BUILTIN_ERROR(ERR_domain_error(not_less_than_zero), number, 1);
     }
-  else if (IsComplex(complex))  /\* i.e. list *\/
-    {
-      if (i == 1)
-        {
-          RefCar(t0,complex);
-          return t0;
-        }
-      else if (i == 2)
-        {
-          RefCdr(t0,complex);
-          return t0;
-        }
-      else return FALSE;
+  });
+
+  DerefSw_HVAorCVAorSVA_NUMorATM_LST_STR(term, { /* HVA CVA SVA */
+    BUILTIN_ERROR(ERR_instantiation_error, term, 2);
+  }, { /* NUM ATM */
+    // if (TaggedIsATM(term)) CBOOL__FAIL; // TODO: comment this case for full ISO compliance
+    BUILTIN_ERROR(ERR_type_error(compound), term, 2);
+  }, { /* LST */ 
+    if (i == 1) {
+      tagged_t t0 = *TaggedToCar(term);
+      CFUN__PROCEED(t0);
+    } else if (i == 2) { 
+      tagged_t t0 = *TaggedToCdr(term);
+      CFUN__PROCEED(t0);
+    } else {
+      CFUN__PROCEED(ERRORTAG); /* (a failure) */
     }
-  // comment next line for full ISO compliance
-  else if (TaggedIsATM(complex)) return FALSE;      
-  else  BUILTIN_ERROR(TYPE_ERROR(COMPOUND), complex, 2);
- 
-
-}
-*/
-
-// Old code without exception 
-CFUN__PROTO(fu2_arg, tagged_t, tagged_t number, tagged_t complex) {
-  CIAO_REG_1(tagged_t, t0);
-  
-  DerefSwitch(number,t0,{goto barf1;});
-  DerefSwitch(complex,t0,{goto barf2;});
-
-  if (TaggedIsSTR(complex)) {
-    intmach_t i = GetSmall(number);
-    tagged_t f = TaggedToHeadfunctor(complex);
-
-    if (i<=0 || i>Arity(f) || f&QMask) {
-      goto barf1;
-    }
-      
-    t0 = *TaggedToArg(complex,i);
-    return t0;
-  } else if (IsComplex(complex)) { // i.e. list 
-    if (number==MakeSmall(1))   {
-      RefCar(t0,complex);
-      return t0;
+  }, { /* STR */
+    SwStruct(f, term, { /* STR(blob) */
+      CFUN__PROCEED(ERRORTAG); /* (a failure) */
+    }, { /* STR(struct) */
+      if (i == 0 || i > Arity(f)) {
+        CFUN__PROCEED(ERRORTAG); /* (a failure) */
+      }
+      tagged_t t0 = *TaggedToArg(term,i);
+      CFUN__PROCEED(t0);
+    });
+  });
+#else
+  DerefSw_HVAorCVAorSVA_Other(number,{
+    goto barf1;
+  }, {
+  });
+  DerefSw_HVAorCVAorSVA_NUMorATM_LST_STR(term, { /* HVA CVA SVA */
+    goto barf2;
+  }, { /* NUM ATM */
+    goto barf2;
+  }, { /* LST */ 
+    if (number==MakeSmall(1)) {
+      tagged_t t0 = *TaggedToCar(term);
+      CFUN__PROCEED(t0);
     } else if (number==MakeSmall(2)) {
-      RefCdr(t0,complex);
-      return t0;
+      tagged_t t0 = *TaggedToCdr(term);
+      CFUN__PROCEED(t0);
     } else {
       goto barf1;
     }
-  } else {
-    goto barf2;
-  }
+  }, { /* STR */
+    SwStruct(f, term, { /* STR(blob) */
+      goto barf1;
+    }, { /* STR(struct) */
+      /* TODO: do we check that 'number' is a small integer? */
+      intval_t i = GetSmall(number);
+      if (i<=0 || i>Arity(f)) goto barf1;
+      tagged_t t0 = *TaggedToArg(term,i);
+      CFUN__PROCEED(t0);
+    });
+  });
 
  barf1:
   MINOR_FAULT("arg/3: incorrect 1st argument");
 
  barf2:
   MINOR_FAULT("arg/3: incorrect 2nd argument");
+#endif
 }
 
 /*---------------------------------------------------------------*/
-/*
-CBOOL__PROTO(bu3_functor, 
-             tagged_t term,
-             tagged_t name,
-             tagged_t arity) {
+
+#define USE_BU3_FUNCTOR_EXCEPTIONS 1 /* ISO compatibility */
+// TODO: deprecate old behavior
+
+// TODO:[arity-limit] see pl2wam_tables.pl; we cannot do heap overflow check here
+
+CBOOL__PROTO(bu3_functor, tagged_t term, tagged_t name, tagged_t arity) {
+#if defined(USE_BU3_FUNCTOR_EXCEPTIONS)
   ERR__FUNCTOR("term_basic:functor", 3);
-  tagged_t t0;
 
-  DerefSwitch(term,t0,{goto construct;});
-    {
-      tagged_t tagarity;
-      
-      if (TermIsAtomic(term))
-        tagarity = TaggedZero;
-      else if (!(term & TagBitFunctor))
-        term = atom_list,
-        tagarity = MakeSmall(2);
-      else
-        {
-          tagged_t f = TaggedToHeadfunctor(term);
-          
-          term = SetArity(f,0),
-          tagarity = MakeSmall(Arity(f));
-        }
+  tagged_t tagarity;
+  DerefSw_HVAorCVAorSVA_NUMorATM_LST_STR(term,{ /* HVA CVA SVA */
+    /* (construct) */
 
-      CBOOL__UnifyCons(tagarity,arity);
-      CBOOL__LASTUNIFY(term,name);
+    DerefSw_HVAorCVAorSVA_Other(name, {
+      BUILTIN_ERROR(ERR_instantiation_error, name, 2);
+    }, {});
+    DerefSw_HVAorCVAorSVA_Other(arity, {
+      BUILTIN_ERROR(ERR_instantiation_error, arity, 3);
+    },{});
+
+    /* Get and check arity */
+    arity_t arity_n;
+    Sw_NUM_Large_Other(arity, { /* NUM */
+      arity_n = GetSmall(arity);
+    }, { /* Large */
+      /* large number, saturate to -1 or max arity plus 1 so that we can
+         continue checking the other arguments */
+      if (bn_positive(TaggedToBignum(arity))) {
+        arity_n = MAXARITY1 + 1;
+      } else {
+        arity_n = -1;
+      }
+    }, { /* Other */
+      BUILTIN_ERROR(ERR_type_error(integer), arity, 3);
+    });
+    if (arity_n < 0) {
+      BUILTIN_ERROR(ERR_domain_error(not_less_than_zero), arity, 3);
     }
- construct:
-    {
-      DerefSwitch(name, t0, 
-                  BUILTIN_ERROR(INSTANTIATION_ERROR, name, 2););
-      DerefSwitch(arity, t0,
-                  BUILTIN_ERROR(INSTANTIATION_ERROR, arity, 3););
-
-      if (TermIsAtomic(name)) 
-        {
-          if (arity == TaggedZero) CBOOL__LASTUNIFY(name,term);
-          else if (arity > TaggedZero) 
-            {
-              if (TaggedIsATM(name)) 
-                {
-                  if (arity < MakeSmall(ARITYLIMIT))
-                    return 
-                      cunify(Arg, make_structure(Arg, SetArity(name,GetSmall(arity))), term);
-                  else if (IsInteger(arity)) 
-                    BUILTIN_ERROR(REPRESENTATION_ERROR(MAX_ARITY), arity, 3);
-                  else
-                    BUILTIN_ERROR(TYPE_ERROR(INTEGER),arity, 3);
-                }
-              else if (IsInteger(arity))
-                BUILTIN_ERROR(TYPE_ERROR(STRICT_ATOM), name, 2);
-              else
-                BUILTIN_ERROR(TYPE_ERROR(INTEGER), arity, 3);
-            }
-          else
-            BUILTIN_ERROR(DOMAIN_ERROR(NOT_LESS_THAN_ZERO), arity, 3);
-        }
-      else
-        BUILTIN_ERROR(TYPE_ERROR(ATOMIC), name, 2);
+    if (arity_n >= MAXARITY1) {
+      BUILTIN_ERROR(ERR_representation_error(max_arity), arity, 3);
     }
-    
-}
-*/
 
-// Old code without exception
-CBOOL__PROTO(bu3_functor, 
-             tagged_t term,
-             tagged_t name,
-             tagged_t arity) {
-  tagged_t t0;
-  
-  DerefSwitch(term,t0,{goto construct;});
-    {
-      tagged_t tagarity;
-      
-      if (TermIsAtomic(term))
-        tagarity = TaggedZero;
-      else if (!(term & TagBitFunctor))
-        term = atom_list,
-        tagarity = MakeSmall(2);
-      else
-        {
-          tagged_t f = TaggedToHeadfunctor(term);
-          
-          term = SetArity(f,0),
-          tagarity = MakeSmall(Arity(f));
-        }
-
-      CBOOL__UnifyCons(tagarity,arity);
-      CBOOL__LASTUNIFY(term,name);
+    if (!TermIsAtomic(name)) {
+      BUILTIN_ERROR(ERR_type_error(atomic), name, 2);
     }
- construct:
-    {
-      DerefSwitch(name,t0,;);
-      DerefSwitch(arity,t0,;);
-      if (TermIsAtomic(name) && (arity==TaggedZero))
-        CBOOL__LASTUNIFY(name,term);
-      else if (TaggedIsATM(name) &&
-               (arity>TaggedZero) && (arity<MakeSmall(ARITYLIMIT)))
-        CBOOL__LASTUNIFY(make_structure(Arg, SetArity(name,GetSmall(arity))), term);
-      else
-        return FALSE;
+    if (arity_n==0) { /* if arity_n==0, 'name' can be any atomic */
+      CBOOL__LASTUNIFY(name,term);
+    } else { /* 'name' must be an atom if arity_n!=0 */
+      if (!TaggedIsATM(name)) {
+        BUILTIN_ERROR(ERR_type_error(atom), name, 2);
+      }
+#if defined(USE_BUILTIN_ENV)
+      HeapMargin_GC((arity_n+1)*sizeof(tagged_t), term); /* (name is an atom, not collected) */
+#endif
+      CBOOL__LASTUNIFY(CFUN__EVAL(make_structure, SetArity(name,arity_n)), term);
     }
+  },{ /* NUM ATM */
+    tagarity = MakeSmall(0);
+    goto unif;
+  }, { /* LST */
+#if defined(OPTIM_COMP)
+    term = atom_lst;
+#else
+    term = atom_list;
+#endif
+    tagarity = MakeSmall(2);
+    goto unif;
+  }, { /* STR */
+    SwStruct(f, term, { /* STR(blob) */
+      tagarity = MakeSmall(0);
+      goto unif;
+    }, { /* STR(struct) */
+      term = FUNCTOR_NAME(f);
+      tagarity = MakeSmall(Arity(f));
+      goto unif;
+    });
+  });
+ unif:
+  CBOOL__UnifyCons(tagarity,arity);
+  CBOOL__LASTUNIFY(term,name);
+#else
+  tagged_t tagarity;
+  DerefSw_HVAorCVAorSVA_NUMorATM_LST_STR(term, { /* HVA CVA SVA */
+    DerefSw_HVAorCVAorSVA_Other(name,;,{});
+    DerefSw_HVAorCVAorSVA_Other(arity,;,{});
+    if (TermIsAtomic(name) && (arity==MakeSmall(0))) {
+      CBOOL__LASTUNIFY(name,term);
+    } else if (TaggedIsATM(name) &&
+               (arity>MakeSmall(0)) && (arity<MakeSmall(MAXARITY1))) {
+      CBOOL__LASTUNIFY(CFUN__EVAL(make_structure, SetArity(name,GetSmall(arity))), term);
+    } else {
+      CBOOL__FAIL;
+    }
+  }, { /* NUM ATM */
+    tagarity = MakeSmall(0);
+    goto unif;
+  }, { /* LST */
+#if defined(OPTIM_COMP)
+    term = atom_lst;
+#else
+    term = atom_list;
+#endif
+    tagarity = MakeSmall(2);
+    goto unif;
+  }, { /* STR */
+    SwStruct(f, term, { /* STR(blob) */
+      tagarity = MakeSmall(0);
+      goto unif;
+    }, { /* STR(struct) */
+      term = FUNCTOR_NAME(f);
+      tagarity = MakeSmall(Arity(f));
+      goto unif;
+    });
+  });
+ unif:
+  CBOOL__UnifyCons(tagarity,arity);
+  CBOOL__LASTUNIFY(term,name);
+#endif
 }
 
 /*---------------------------------------------------------------*/
 
-CBOOL__PROTO(bu2_univ, 
-             tagged_t term,
-             tagged_t list)
-{ 
+// TODO: required for ISO compatibility; this seems to be OK with our codebase
+#define USE_BU2_UNIV_EXCEPTIONS 1
+
+// TODO:[arity-limit] see pl2wam_tables.pl; we cannot do heap overflow check here
+
+CBOOL__PROTO(bu2_univ, tagged_t term, tagged_t list) {
+#if defined(USE_BU2_UNIV_EXCEPTIONS)
   ERR__FUNCTOR("term_basic:=..", 2);
-  CIAO_REG_1(tagged_t, car);
-  CIAO_REG_2(tagged_t, cdr);
+#endif
+  tagged_t car;
+  tagged_t cdr;
   tagged_t *argp;
   tagged_t *argq;
-  int arity;
-  tagged_t f;
+  arity_t arity;
+  tagged_t fname;
 
-  DerefSwitch(term,car,{goto construct;});
+  DerefSw_HVAorCVAorSVA_NUMorATM_LST_STR(term, { /* HVA CVA SVA */
+    goto construct;
+  }, { /* NUM ATM */
+    arity = 0;
+    fname = term;
+  }, { /* LST */
+    arity = 2;
+    fname = FUNCTOR_NAME(functor_lst);
+  }, { /* STR */
+    SwStruct(hf, term, { /* STR(blob) */
+      arity = 0;
+      fname = term;
+    }, { /* STR(struct) */
+      arity = Arity(hf);
+      fname = FUNCTOR_NAME(hf);
+    });
+  });
+
+#if defined(USE_BUILTIN_ENV)
+  HeapMargin_GC((arity+1)*(2*sizeof(tagged_t)), term, list);
+#endif
   cdr = atom_nil;
-  if (TermIsAtomic(term))
-    {
-      MakeLST(cdr,term,cdr);
-      CBOOL__LASTUNIFY(cdr,list);
+  if (arity > 0) {
+    if (TaggedIsLST(term)) {
+      argp = TaggedToCar(term);
+    } else {
+      argp = TaggedToArg(term,1);
     }
-  
-  if (term & TagBitFunctor)
-    f = TaggedToHeadfunctor(term),
-    argp = TaggedToArg(term,1),
-    argq = HeapOffset(argp,Arity(f));
-  else
-    f = functor_list,
-    argp = TaggedToCar(term),
-    argq = HeapOffset(argp,2);
-
-  while HeapYounger(argq,argp)
-    {
-      HeapDecr(argq);
-      RefHeap(car,argq);
+    argq = HeapCharOffset(argp,arity*sizeof(tagged_t));
+    while (HeapYounger(argq,argp)) {
+      argq--;
+      car = *argq;
       MakeLST(cdr,car,cdr);
     }
-  MakeLST(cdr,SetArity(f,0),cdr);
+  }
+  MakeLST(cdr,fname,cdr);
   CBOOL__LASTUNIFY(cdr,list);
 
  construct:
   cdr = list;
-  DerefSwitch(cdr,car, BUILTIN_ERROR(INSTANTIATION_ERROR, list, 2););
-  arity = 0;
-
-  if (IsVar(cdr))
+  DerefSw_HVAorCVAorSVA_Other(cdr, {
+#if defined(USE_BU2_UNIV_EXCEPTIONS)
+    BUILTIN_ERROR(ERR_instantiation_error, list, 2);
+#else
     goto bomb;
-  if (!TaggedIsLST(cdr))
-    {
-      if (cdr == atom_nil)
-        BUILTIN_ERROR(DOMAIN_ERROR(NON_EMPTY_LIST), list, 2); 
-      else
-        BUILTIN_ERROR(TYPE_ERROR(LIST), list, 2); 
+#endif
+  }, {
+  });
+  if (!TaggedIsLST(cdr)) {
+#if defined(USE_BU2_UNIV_EXCEPTIONS)
+    if (cdr == atom_nil) {
+      BUILTIN_ERROR(ERR_domain_error(non_empty_list), list, 2); 
+    } else {
+      BUILTIN_ERROR(ERR_type_error(list), list, 2); 
     }
-
-  DerefCar(f,cdr);
-  DerefCdr(cdr,cdr);
-  if (cdr==atom_nil)
-    {
-      if (TermIsAtomic(f))
-        CBOOL__LASTUNIFY(f,term);
-      else 
-        BUILTIN_ERROR(TYPE_ERROR(ATOMIC), f, 2); 
-    }
-  else if (IsVar(f))
-    goto bomb;
-  else if (!TaggedIsATM(f))
-    BUILTIN_ERROR(TYPE_ERROR(STRICT_ATOM), f, 2); 
-
-
-  argp = w->heap_top;
-  HeapPush(w->heap_top,f);
-  while (TaggedIsLST(cdr) && arity<ARITYLIMIT)
-    {
-      DerefCar(car,cdr);
-      DerefCdr(cdr,cdr);
-      HeapPush(w->heap_top,car);
-      arity++;
-    }
-  if (IsVar(cdr))
-    goto bomb;
-  if (arity==ARITYLIMIT)
-    BUILTIN_ERROR(REPRESENTATION_ERROR(MAX_ARITY), list, 2);
-  if (cdr!=atom_nil) 
-    BUILTIN_ERROR(TYPE_ERROR(LIST), list, 2);
-  
-  f = SetArity(f,arity);
-  if (f==functor_list)
-    {
-      w->heap_top = argp;
-      argq = HeapOffset(w->heap_top,1);
-      RefHeapNext(car,argq);
-      RefHeapNext(cdr,argq);
-      HeapPush(w->heap_top,car);
-      HeapPush(w->heap_top,cdr);
-      CBOOL__LASTUNIFY(Tagp(LST,argp),term);
-    }
-  else
-    {
-      *argp = f;
-      CBOOL__LASTUNIFY(Tagp(STR,argp),term);
-    }
-
- bomb:
-  BUILTIN_ERROR(INSTANTIATION_ERROR,list, 2);
-}
-
-/*
-// Old code without exception
-CBOOL__PROTO(bu2_univ, 
-             tagged_t term,
-             tagged_t list)
-{
-  CIAO_REG_1(tagged_t, car);
-  CIAO_REG_2(tagged_t, cdr);
-  tagged_t *argp;
-  tagged_t *argq;
-  int arity;
-  tagged_t f;
-
-  DerefSwitch(term,car,{goto construct;});
-  cdr = atom_nil;
-  if (TermIsAtomic(term))
-    {
-      MakeLST(cdr,term,cdr);
-      CBOOL__LASTUNIFY(cdr,list);
-    }
-  
-  if (term & TagBitFunctor)
-    f = TaggedToHeadfunctor(term),
-    argp = TaggedToArg(term,1),
-    argq = HeapOffset(argp,Arity(f));
-  else
-    f = functor_list,
-    argp = TaggedToCar(term),
-    argq = HeapOffset(argp,2);
-  
-  while HeapYounger(argq,argp)
-    {
-      HeapDecr(argq);
-      RefHeap(car,argq);
-      MakeLST(cdr,car,cdr);
-    }
-  MakeLST(cdr,SetArity(f,0),cdr);
-  CBOOL__LASTUNIFY(cdr,list);
-
- construct:
-  cdr = list;
-  DerefSwitch(cdr,car,;);
-  arity = 0;
-
-  if (IsVar(cdr))
-    goto bomb;
-  if (!TaggedIsLST(cdr))
+#else
     MINOR_FAULT("=../2: incorrect 2nd argument");
+#endif
+  }
+  tagged_t f;
   DerefCar(f,cdr);
   DerefCdr(cdr,cdr);
-  if (TermIsAtomic(f) && (cdr==atom_nil))
+#if defined(USE_BU2_UNIV_EXCEPTIONS)
+  if (cdr==atom_nil) {
+    if (TermIsAtomic(f)) {
+      CBOOL__LASTUNIFY(f,term);
+    } else {
+      BUILTIN_ERROR(ERR_type_error(atomic), f, 2); 
+    }
+  } else if (IsVar(f)) {
+    goto bomb;
+  } else if (!TaggedIsATM(f)) {
+    BUILTIN_ERROR(ERR_type_error(atom), f, 2); 
+  }
+#else
+  if ((cdr==atom_nil) && TermIsAtomic(f)) {
     CBOOL__LASTUNIFY(f,term);
-  else if (IsVar(f))
+  } else if (IsVar(f)) {
     goto bomb;
-  else if (!TaggedIsATM(f))
+  } else if (!TaggedIsATM(f)) {
     MINOR_FAULT("=../2: incorrect 2nd argument");
-  
-  argp = w->heap_top;
-  HeapPush(w->heap_top,f);
-  while (TaggedIsLST(cdr) && arity<ARITYLIMIT)
-    {
+  }
+#endif
+
+#if defined(USE_BUILTIN_ENV)
+  /* compute arity first */
+  arity = 0;
+  tagged_t p = cdr;
+  while (TaggedIsLST(p) && arity<MAXARITY1) {
+    DerefCdr(p,p);
+    arity++;
+  }
+  if (IsVar(p)) goto bomb;
+  if (arity==MAXARITY1) {
+    BUILTIN_ERROR(ERR_representation_error(max_arity), list, 2);
+  }
+  if (p!=atom_nil) {
+    BUILTIN_ERROR(ERR_type_error(list), list, 2);
+  }
+
+  HeapMargin_GC((arity+1)*sizeof(tagged_t));
+
+  f = SetArity(f,arity);
+  argp = G->heap_top;
+  if (f==functor_lst) {
+    DerefCar(car,cdr); // first elem
+    DerefCdr(cdr,cdr);
+    DerefCar(cdr,cdr); // second elem
+    HeapPush(G->heap_top,car);
+    HeapPush(G->heap_top,cdr);
+    CBOOL__LASTUNIFY(Tagp(LST,argp),term);
+  } else {
+    HeapPush(G->heap_top,f);
+    while (TaggedIsLST(cdr)) {
       DerefCar(car,cdr);
       DerefCdr(cdr,cdr);
-      HeapPush(w->heap_top,car);
-      arity++;
+      HeapPush(G->heap_top,car);
     }
-  if (IsVar(cdr))
-    goto bomb;
-  if (cdr!=atom_nil || arity==ARITYLIMIT)
+    CBOOL__LASTUNIFY(Tagp(STR,argp),term);
+  }
+#else
+  /* compute arity and build term simultaneously */
+  arity = 0;
+  argp = G->heap_top;
+  HeapPush(G->heap_top,f);
+  while (TaggedIsLST(cdr) && arity<MAXARITY1) {
+    DerefCar(car,cdr);
+    DerefCdr(cdr,cdr);
+    HeapPush(G->heap_top,car);
+    arity++;
+  }
+  if (IsVar(cdr)) goto bomb;
+#if defined(USE_BU2_UNIV_EXCEPTIONS)
+  if (arity==MAXARITY1) {
+    BUILTIN_ERROR(ERR_representation_error(max_arity), list, 2);
+  }
+  if (cdr!=atom_nil) {
+    BUILTIN_ERROR(ERR_type_error(list), list, 2);
+  }
+#else
+  if (cdr!=atom_nil || arity==MAXARITY1) {
     MINOR_FAULT("=../2: incorrect 2nd argument");
-  
+  }
+#endif
+
   f = SetArity(f,arity);
-  if (f==functor_list)
-    {
-      w->heap_top = argp;
-      argq = HeapOffset(w->heap_top,1);
-      RefHeapNext(car,argq);
-      RefHeapNext(cdr,argq);
-      HeapPush(w->heap_top,car);
-      HeapPush(w->heap_top,cdr);
-      CBOOL__LASTUNIFY(Tagp(LST,argp),term);
-    }
-  else
-    {
-      *argp = f;
-      CBOOL__LASTUNIFY(Tagp(STR,argp),term);
-    }
+  if (f==functor_lst) { /* rewrite as a list; note: cannot handle LST cast directly because arity is not known until all the input is processed */
+    G->heap_top = argp;
+    argq = HeapCharOffset(G->heap_top,1*sizeof(tagged_t));
+    car = *argq;
+    argq++;
+    cdr = *argq;
+    argq++;
+    HeapPush(G->heap_top,car);
+    HeapPush(G->heap_top,cdr);
+    CBOOL__LASTUNIFY(Tagp(LST,argp),term);
+  } else {
+    *argp = f;
+    CBOOL__LASTUNIFY(Tagp(STR,argp),term);
+  }
+#endif
 
  bomb:
-    USAGE_FAULT("=../2: illegal arguments");
+#if defined(USE_BU2_UNIV_EXCEPTIONS)
+  BUILTIN_ERROR(ERR_instantiation_error,list, 2);
+#else
+  USAGE_FAULT("=../2: illegal arguments");
+#endif
 }
-*/
 

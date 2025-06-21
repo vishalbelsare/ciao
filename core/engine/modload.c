@@ -7,6 +7,7 @@
  */
 
 #include <ciao/eng.h>
+#include <ciao/os_defs.h>
 #include <ciao/io_basic.h>
 
 #if defined(FOREIGN_FILES)
@@ -19,10 +20,6 @@
 #include <string.h>
 
 #include <ciao/modload.h>
-
-#if !defined(MAXPATHLEN)
-# define MAXPATHLEN 1024
-#endif
 
 static void unload_if_present(char *module_name);
 
@@ -39,7 +36,7 @@ static void add_to_loaded_objects(char *module_name,
 # else
 #  define LIB_LOADING_TYPE RTLD_LAZY | RTLD_LOCAL
 # endif
-#elif defined(LINUX) || defined(WIN32) || defined(DARWIN)  || defined(BSD) 
+#elif defined(LINUX)||defined(EMSCRIPTEN)||defined(WIN32)||defined(DARWIN)||defined(BSD) 
 # define LIB_LOADING_TYPE RTLD_LAZY | RTLD_LOCAL     
 #else /* Default options for new architecture */ 
 # define LIB_LOADING_TYPE RTLD_LAZY | RTLD_LOCAL
@@ -95,7 +92,7 @@ CBOOL__PROTO(prolog_dynlink)
   }
   lib_name = (char *)GetString(X(0));
 
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
   if (debug_dynlink) fprintf(stderr, "Linking %s\n", lib_name);
 #endif
 
@@ -184,7 +181,7 @@ CBOOL__PROTO(prolog_dynunlink)
     USAGE_FAULT("dynunlink/1: first argument must be an atom");
   module_name = (char *)GetString(X(0));
 
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
   if (debug_dynlink) fprintf(stderr, "Unlinking %s\n", module_name);
 #endif
 
@@ -204,7 +201,7 @@ void unload_if_present(char *module_name)
   lobj_t *to_remove = NULL;
   bool_t found = FALSE;
 
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
   if (debug_dynlink) fprintf(stderr, "Unloading %s\n",module_name);
 #endif
 
@@ -226,7 +223,7 @@ void unload_if_present(char *module_name)
     }
 
     if (to_remove) {
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
       if (debug_dynlink) fprintf(stderr, "Closing handle for %s\n",module_name);
 #endif
       (*to_remove->end_func)(to_remove->module_name);     /* JFMC / MCL */
@@ -240,7 +237,7 @@ void unload_if_present(char *module_name)
       checkdealloc_TYPE(lobj_t, to_remove);
     }
   }
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
   if (debug_dynlink) fprintf(stderr, "all_loaded_objects = 0x%p\n", all_loaded_objects);
 #endif
 }
@@ -254,7 +251,7 @@ void add_to_loaded_objects(char *module_name,
 {
   lobj_t *new_object = checkalloc_TYPE(lobj_t);
 
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
   if (debug_dynlink) fprintf(stderr, "Adding %s\n",module_name);
 #endif
   new_object->module_name = checkalloc_ARRAY(char, strlen(module_name)+1);
@@ -264,20 +261,31 @@ void add_to_loaded_objects(char *module_name,
                                       dlclose */
   new_object->next = (lobj_t *)all_loaded_objects;
   all_loaded_objects = new_object;
-#if defined(DEBUG)
+#if defined(DEBUG_TRACE)
   if (debug_dynlink) fprintf(stderr, "all_loaded_objects = 0x%p\n", all_loaded_objects);
 #endif
 }
 #else 
 CBOOL__PROTO(prolog_dynlink) {
-  StreamPrintf(Error_Stream_Ptr, "{ERROR: dynlink: emulator not created with foreign files interface}\n");
-  StreamPrintf(Error_Stream_Ptr, "{Please recompile with foreing files option turned on}\n");
+  DEREF(X(0), X(0));
+  if (!TaggedIsATM(X(0))) {
+    USAGE_FAULT("dynlink/2: first argument must be an atom");
+  }
+#if defined(EMSCRIPTEN) /* TODO: known limitation, do not complain until we fix it */
+#else
+  char *lib_name = (char *)GetString(X(0));
+  StreamPrintf(Error_Stream_Ptr, "{ERROR: dynlink: emulator not created with foreign files interface, cannot load '%s'}\n", lib_name);
+  StreamPrintf(Error_Stream_Ptr, "{Please recompile with foreign files option turned on}\n");
+#endif
   return FALSE;
 }
 
 CBOOL__PROTO(prolog_dynunlink) {
+#if defined(EMSCRIPTEN) /* TODO: known limitation, do not complain until we fix it */
+#else
   StreamPrintf(Error_Stream_Ptr, "{ERROR: dynunlink: emulator not created with foreign files interface}\n");
-  StreamPrintf(Error_Stream_Ptr, "{Please recompile with foreing files option turned on}\n");
+  StreamPrintf(Error_Stream_Ptr, "{Please recompile with foreign files option turned on}\n");
+#endif
   return FALSE;
 }
 #endif

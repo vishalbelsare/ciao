@@ -2,16 +2,8 @@
  *  runtime_control.c
  *
  *  Copyright (C) 1996-2002 UPM-CLIP
- *  Copyright (C) 2020 The Ciao Development Team
+ *  Copyright (C) 2020-2024 The Ciao Development Team
  */
-
-#if defined(DEBUG)
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/types.h>                                    /* For getpid() */
-#endif
-
-#include <string.h>
 
 #include <ciao/eng.h>
 #include <ciao/eng_registry.h>
@@ -22,69 +14,16 @@
 #include <ciao/eng_profile.h>
 #include <ciao/basiccontrol.h>
 
-/* -------------------------------------------------------------------
-   CHOICEPT MANIPULATIONS
-   ----------------------------------------------------------------------*/
+#include <ciao/timing.h>
+#include <ciao/io_basic.h>
 
-CVOID__PROTO(pop_choicept) {
-  choice_t *b = w->choice;
-  w->choice = b = ChoiceCont(b);
-  SetShadowregs(b);
-}
-
-CVOID__PROTO(push_choicept, try_node_t *alt)
-{
-  intmach_t n = alt->choice_offset;
-  tagged_t *b0 = (tagged_t *)w->choice;
-  choice_t *b = ChoiceCharOffset(b0,n);
-
-  ComputeA(w->local_top,w->choice);
-  w->choice = b;
-  NewShadowregs(w->heap_top);
-
-  b->trail_top = w->trail_top;
-  SaveGtop(b,w->heap_top);
-  b->next_alt = alt;
-  b->frame = w->frame;
-  b->next_insn = w->next_insn;
-  SaveLtop(b);
-  n = OffsetToArity(n);
-  while (n>0)
-    ChoicePush(b0,X(--n));
-  if (ChoiceYounger(ChoiceOffset(w->choice,CHOICEPAD),w->trail_top))
-    choice_overflow(Arg,CHOICEPAD);
-}
-
-#if defined(PARBACK)
-CBOOL__PROTO(nd_suspension_point)
-{
-  //Reinstall next_insn and Frame (Done by fail).
-  //Reinstal argument register
-  tagged_t t = w->choice->term[0];
-  definition_t * func = (definition_t *) *TaggedToPointer(t);
-  int i;
-  for (i = 0; i < func->arity; i++) DEREF(X(i),*TaggedToPointer(TaggedToPointer(t)+i+1));
-  //Take choice point out
-  Arg->next_insn = restart_point_insn;
-
-  return TRUE;
-}
-#endif
-
-#if defined(TABLING)
-CBOOL__PROTO(nd_fake_choicept)
-{
-  pop_choicept(Arg);
-  return FALSE;
-}
-#endif
+#include <string.h>
 
 /* ------------------------------------------------------------------
    THE BUILTIN C-PREDICATE       CURRENT_ATOM/1
    -----------------------------------------------------------------------*/
 
-CBOOL__PROTO(current_atom)
-{
+CBOOL__PROTO(current_atom) {
   DEREF(X(0),X(0));
   if (TaggedIsATM(X(0)))
     return TRUE;
@@ -94,7 +33,7 @@ CBOOL__PROTO(current_atom)
   { 
     /* There is an (improbable) case: the 0-th table entry is empty.
        Take it into account. */
-    intmach_t size = SwitchSize(ciao_atoms) >> 1;
+    intmach_t size = HASHTAB_SIZE(ciao_atoms) >> 1;
     intmach_t i = 0;
     while (i < size && (atmtab[i] == NULL))
       i++;
@@ -107,8 +46,7 @@ CBOOL__PROTO(current_atom)
   return nd_current_atom(Arg);
 }
 
-CBOOL__PROTO(nd_current_atom)
-{
+CBOOL__PROTO(nd_current_atom) {
   intmach_t i = GetSmall(X(1));
 
 #if defined(ATOMGC)
@@ -124,7 +62,7 @@ CBOOL__PROTO(nd_current_atom)
 
   */
 
-  intmach_t size = SwitchSize(ciao_atoms) >> 1;
+  intmach_t size = HASHTAB_SIZE(ciao_atoms) >> 1;
 
   /* Invariant: at entry, the current i points to a nonempty atom */
   CBOOL__UnifyCons(TagIndex(ATM,i),X(0));
@@ -135,11 +73,11 @@ CBOOL__PROTO(nd_current_atom)
     i++;
   
   if (i < size)                                  /* We got the next index */
-    w->choice->term[1] = MakeSmall(i);
+    w->choice->x[1] = MakeSmall(i);
   else 
     pop_choicept(Arg);
 #else
-  w->choice->term[1] += MakeSmallDiff(1);
+  w->choice->x[1] += MakeSmallDiff(1);
   CBOOL__UnifyCons(TagIndex(ATM,i),X(0));
     
   if (i+1 == ciao_atoms->count)
@@ -153,8 +91,7 @@ CBOOL__PROTO(nd_current_atom)
 
 /* TODO: alternatively: use the mem address, if it is stable (JF) */
 
-/* 
-   Support for generating new atoms with "funny names", always different.
+/* Support for generating new atoms with "funny names", always different.
    Make sure that the generation works OK with concurrency.  */
 
 /* This seems to be the right size: one character less, and time (at large)
@@ -168,18 +105,17 @@ static char new_atom_str[] = "!!!!!!!!!!!!!";
 #define FIRST_CHAR 0
 #define LAST_CHAR  (NUM_OF_CHARS-1)
 
-unsigned int x = 13*17;
+static uintmach_t x = 13*17;
 
-CBOOL__PROTO(prolog_new_atom)
-{
+CBOOL__PROTO(prolog_new_atom) {
   ERR__FUNCTOR("runtime_control:new_atom", 1);
-  int i;
-  int previous_atoms_count;
+  intmach_t i;
+  intmach_t previous_atoms_count;
   tagged_t new_atom;
 
   DEREF(X(0), X(0));
   if (!IsVar(X(0))) {
-    BUILTIN_ERROR(UNINSTANTIATION_ERROR,X(0),1);
+    BUILTIN_ERROR(ERR_uninstantiation_error,X(0),1);
   }
 
   Wait_Acquire_slock(atom_id_l);
@@ -199,58 +135,128 @@ CBOOL__PROTO(prolog_new_atom)
   CBOOL__LASTUNIFY(X(0), new_atom);
 }
 
-/* ------------------------------------------------------------------
-   THE BUILTIN C-PREDICATE       $CURRENT_CLAUSES/2
-   -----------------------------------------------------------------------*/
+/* ------------------------------------------------------------------------- */
 
-/* This used to be nondeterministic. */
-/* ASSERT: X1 is always unbound, unconditional. */
-CBOOL__PROTO(current_clauses)
-{
-  tagged_t *junk;
-  definition_t *d;
+CBOOL__PROTO(statistics) {
+  stream_node_t *s = Output_Stream_Ptr;
+  intmach_t used, free;
+  frame_t *newa;
 
-  DEREF(X(0),X(0));
-  if (! IsVar(X(0))) {
-    d = find_definition(predicates_location,X(0),&junk,FALSE);
-    if ((d!=NULL) && (d->predtyp==ENTER_INTERPRETED)) {
-      return (*TaggedToPointer(X(1))=PointerToTerm(d->code.intinfo), TRUE);
-    } else {
-      return FALSE;
-    }
-  }
-  else {
-    MINOR_FAULT("$current_clauses/2: incorrect 1st arg");
-  }
-}
+  inttime_t runtick0;
+  inttime_t usertick0 = usertick();
+  inttime_t systemtick0 = systemtick();
+  runtick0=usertick0;
 
-/* ------------------------------------------------------------------
-   THE BUILTIN C-PREDICATE       REPEAT/0
-   -----------------------------------------------------------------------*/
+  inttime_t walltick0 = walltick();
 
-CBOOL__PROTO(prolog_repeat)
-{
-  push_choicept(Arg,address_nd_repeat);
+  StreamPrintf(s,
+             "memory used (total)    %10" PRIdm " bytes\n",
+             total_mem_count);
+  StreamPrintf(s, 
+             "   program space (including reserved for atoms): %" PRIdm " bytes\n", 
+             mem_prog_count);
+
+  StreamPrintf(s,
+             "   number of atoms and functor/predicate names: %" PRIdm "\n", 
+             ciao_atoms->count);
+  StreamPrintf(s,
+             "   number of predicate definitions: %" PRIdm "\n", 
+             num_of_predicates);
+
+  used = HeapCharDifference(Heap_Start,w->heap_top);
+  free = HeapCharDifference(w->heap_top,Heap_End);
+  StreamPrintf(s, 
+             "   global stack   %10" PRIdm " bytes:%" PRIdm " in use,%10" PRIdm " free\n",
+             used+free, used, free);
+
+  GetFrameTop(newa,w->choice,G->frame);
+  used = StackCharDifference(Stack_Start,newa);
+  free = StackCharDifference(newa,Stack_End);
+  StreamPrintf(s,
+             "   local stack    %10" PRIdm " bytes:%10" PRIdm " in use,%10" PRIdm " free\n",
+             used+free, used, free);
+
+  used = TrailCharDifference(Trail_Start,w->trail_top);
+  free = TrailCharDifference(w->trail_top,w->choice)/2;
+  StreamPrintf(s,
+             "   trail stack    %10" PRIdm " bytes:%10" PRIdm " in use,%10" PRIdm " free\n",
+             used+free, used, free);
+
+  used = ChoiceCharDifference(Choice_Start,w->choice);
+  free = ChoiceCharDifference(w->choice,w->trail_top)/2;
+  StreamPrintf(s,
+             "   control stack  %10" PRIdm " bytes:%10" PRIdm " in use,%10" PRIdm " free\n\n",
+             used+free, used, free);
+
+  StreamPrintf(s,
+             " %10.6f sec. for %" PRIdm " global, %" PRIdm " local, and %" PRIdm " control space overflows\n",
+             ((flt64_t)ciao_stats.ss_tick)/RunClockFreq(ciao_stats),
+             ciao_stats.ss_global,
+             ciao_stats.ss_local, ciao_stats.ss_control);
+  StreamPrintf(s,
+             " %10.6f sec. for %" PRIdm " garbage collections which collected %" PRIdm " bytes\n\n",
+             ((flt64_t)ciao_stats.gc_tick)/RunClockFreq(ciao_stats),
+             ciao_stats.gc_count,
+             (intmach_t)ciao_stats.gc_acc);
+
+  StreamPrintf(s,
+             " runtime:    %10.6f sec. %12" PRId64 " ticks at %12" PRId64 " Hz\n",
+             (flt64_t)(runtick0-ciao_stats.starttick)/RunClockFreq(ciao_stats),
+             runtick0-ciao_stats.starttick,
+             RunClockFreq(ciao_stats));
+  StreamPrintf(s,
+             " usertime:   %10.6f sec. %12" PRId64 " ticks at %12" PRId64 " Hz\n",
+             (flt64_t)(usertick0-ciao_stats.startusertick)/ciao_stats.userclockfreq,
+             usertick0-ciao_stats.startusertick,
+             ciao_stats.userclockfreq);
+  StreamPrintf(s,
+             " systemtime: %10.6f sec. %12" PRId64 " ticks at %12" PRId64 " Hz\n",
+             (flt64_t)(systemtick0-ciao_stats.startsystemtick)/ciao_stats.systemclockfreq,
+             systemtick0-ciao_stats.startsystemtick,
+             ciao_stats.systemclockfreq);
+  StreamPrintf(s,
+             " walltime:   %10.6f sec. %12" PRId64 " ticks at %12" PRId64 " Hz\n\n",
+             (flt64_t)(walltick0-ciao_stats.startwalltick)/ciao_stats.wallclockfreq,
+             walltick0-ciao_stats.startwalltick,
+             ciao_stats.wallclockfreq);
+
+  //#define DESCRIBE_TAGS 1 /* debug, only for 64-bits */
+#if defined(DESCRIBE_TAGS)
+  // macos: sysctl machdep.virtual_address_size
+  //        (machdep.virtual_address_size: 47)
+  // linux: grep -i 'address sizes' /proc/cpuinfo
+  //        address sizes	: 40 bits physical, 48 bits virtual
+  StreamPrintf(s, "VirtualAddressMask: 0x%016llx\n", ((uintmach_t)1<<48)-1);
+  StreamPrintf(s, "SMALLPTR_BASE: 0x%016llx\n", (uintmach_t)SMALLPTR_BASE);
+  //
+  StreamPrintf(s, "GC_ANYMASK: 0x%016llx\n", GC_ANYMASK); // TODO: needed for (all) non-pointers?
+  StreamPrintf(s, "TAGMASK: 0x%016llx\n", TAGMASK);
+  StreamPrintf(s, "QTAGMASK: 0x%016llx\n", QTAGMASK);
+  StreamPrintf(s, " (HVA=0x%016llx)\n", Tagn(HVA,0));
+  StreamPrintf(s, " (CVA=0x%016llx)\n", Tagn(CVA,0));
+  StreamPrintf(s, " (SVA=0x%016llx)\n", Tagn(SVA,0));
+  StreamPrintf(s, " (UBV=0x%016llx)\n", Tagn(UBV,0));
+  StreamPrintf(s, " (LST=0x%016llx)\n", Tagn(LST,0));
+  StreamPrintf(s, " (STR=0x%016llx)\n", Tagn(STR,0));
+  StreamPrintf(s, "  POINTERMASK: 0x%016llx\n", POINTERMASK);
+  StreamPrintf(s, " (ATM=0x%016llx)\n", Tagn(ATM,0));
+  StreamPrintf(s, "  ArityMask: 0x%016llx\n", MakeMask(uintmach_t, ARITYSIZE, ARITYOFFSET));
+  StreamPrintf(s, "  IndexMask: 0x%016llx\n", MakeMask(uintmach_t, ARITYOFFSET-tagged__atm_offset, tagged__atm_offset));
+  StreamPrintf(s, "  (MAXARITY=%lld)\n", (uintmach_t)MAXARITY1 - 1);
+  StreamPrintf(s, "  (MAXPROCARITY=%lld)\n", (uintmach_t)MAXPROCARITY1 - 1);
+  StreamPrintf(s, "  (MaxAtomCount=%lld)\n", (uintmach_t)MaxAtomCount);
+  StreamPrintf(s, " (NUM=0x%016llx)\n", Tagn(NUM,0));
+  StreamPrintf(s, "  NumMask: 0x%016llx\n", MakeMask(uintmach_t, tagged__num_size, tagged__num_offset));
+  StreamPrintf(s, "Max structure size: %.6f MB\n", (double)MAXARITY1*sizeof(tagged_t)/(1024*1024));
+  StreamPrintf(s, "Min atom size: 0x%llx bytes\n", (uintmach_t)sizeof(atom_t));
+  StreamPrintf(s, "Max alloc of min atoms: %.6f MB\n", (double)sizeof(atom_t)*MaxAtomCount/(1024*1024));
+#endif
+
   return TRUE;
 }
 
-CBOOL__PROTO(nd_repeat)
-{
-  return TRUE;
+/* ------------------------------------------------------------------------- */
+
+CBOOL__PROTO(get_max_arity) {
+  CBOOL__LASTUNIFY(X(0), MakeSmall(MAXARITY1 - 1));
 }
-
-
-/* ------------------------------------------------------------------ */
-
-CBOOL__PROTO(module_is_static)
-{
-  DEREF(X(0),X(0));
-  if (!TaggedIsATM(X(0)))
-    return FALSE;
-
-  module_t *d = insert_module(modules_location,X(0),FALSE);
-  if (d==NULL) return FALSE;
-
-  return d->properties.is_static;
-}
-

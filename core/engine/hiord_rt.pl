@@ -1,41 +1,39 @@
-:- module(hiord_rt, 
-    [
-        call/1,
-        call/2 /* call/N, */, 
-        'SYSCALL'/1, 
-        '$nodebug_call'/1,
-        '$meta_call'/1,
-        this_module/1
-    ],[assertions, nortchecks, isomodes]).
+:- module(hiord_rt, [], [assertions, nortchecks, isomodes]).
 
 :- doc(title,"Higher-order support").
 
 :- doc(author,"Daniel Cabeza").
+:- doc(author,"Jose F. Morales (improvements)").
 
 :- doc(module,"This module is a wrapper for the
    implementation-defined predicate @pred{call/1}, and it implements
    the @pred{call/2} predicate.").
 
+% ---------------------------------------------------------------------------
+:- export(call/1).
 :- doc(call(G), "Executes goal @var{G}, restricting the scope of
    the cuts to the execution of @var{G}.  Equivalent to writing a
    variable @var{G} in a goal position.").
 
 :- trust pred call(+cgoal) + (iso, native). 
-:- primitive_meta_predicate(call(goal)).
+:- meta_predicate call(primitive(goal)).
 :- impl_defined(call/1).
 
-:- doc(call(Pred,Arg1), "There exists a set of builtin predicates
-   of the form @pred{call/N} with @tt{N > 1} which execute predicate
-   @var{Pred} given arguments @var{Arg1} ... @var{ArgX}. If @var{Pred}
-   has already arguments @var{Arg1} is added to the start, the rest to
-   the end. This predicate, when @var{Pred} is a variable, can be
-   written using the special Ciao syntax @tt{Pred(Arg1,...,ArgX)}.").
-
+% ---------------------------------------------------------------------------
+:- export(call/2). % call/N
+:- doc(call(Pred,Arg1), "The family of builtin predicates of the form
+   @pred{call/N} with @tt{N > 1} execute the predicate @var{Pred}
+   applying arguments @var{Arg1} ... @var{ArgN}. If @var{Pred} has
+   already @tt{M} arguments, @var{Arg1} ... @var{ArgN} are added to
+   the end resulting in a call to a predicate of arity @tt{M+N}. When
+   using the @lib{hiord} package, the @tt{Pred(Arg1,...,ArgN)} syntax
+   (with @var{Pred} a variable) is accepted as equivalent to
+   @tt{call(Pred, Arg1, ..., ArgN)}.").
 
 % Won't get checked due to throw/1 in the first clause of calln/2.
 :- pred call(+cgoal,?term) + native. 
 
-% :- primitive_meta_predicate(call(pred(1),?)).
+% :- meta_predicate call(primitive(pred(N)),?). % where N is arity of Args
 
 call(V, Args) :- calln(V, Args).
 
@@ -66,19 +64,61 @@ calln(Pred, Args) :-
     functor(Args,_,N),
     throw(error(type_error(pred(N),Pred), call/n-1)).
 
-
+% ---------------------------------------------------------------------------
+:- export('SYSCALL'/1).
 :- trust pred 'SYSCALL'(+cgoal).
 :- impl_defined('SYSCALL'/1).
 
-
+% ---------------------------------------------------------------------------
+:- export('$nodebug_call'/1).
 :- trust pred '$nodebug_call'(+cgoal).
-:- primitive_meta_predicate('$nodebug_call'(goal)).
+:- meta_predicate '$nodebug_call'(primitive(goal)).
 :- impl_defined('$nodebug_call'/1).
 
+% ---------------------------------------------------------------------------
+:- export('$meta_call'/1).
 :- trust pred '$meta_call'(+A) : cgoal(A) + native(call(A)).
-:- impl_defined('$meta_call'/1).
+:- impl_defined('$meta_call'/1). % like call/1 but without any meta expansion
 
+% ---------------------------------------------------------------------------
+:- export('$meta_exp'/3).
+:- trust pred '$meta_exp'(+Metatype, +P, -E) # "Unify @var{E} with the
+   metaexpansion of @var{P} with metatype @var{Metatype} (using static
+   metaexpansion when possible and dynamic metaexpansion when
+   necessary)".
+:- impl_defined('$meta_exp'/3).
 
+% ---------------------------------------------------------------------------
+:- export('$is_pa'/1).
+% PA is a predicate abstraction
+% TODO: define next to callable/1?
+'$is_pa'(PA) :-
+    nonvar(PA), PA = '$:'(PA1),
+    nonvar(PA1), PA1 = 'PAEnv'(_, _).
+
+:- export('$pa_env'/2).
+% Extract ShEnv shared environment from a PA:
+%  - captured variables for predicate abstractions
+%    (e.g., '$meta_exp'(goal, ([X,Y] -> ''(Z) :- append(X,Y,Z), _))) ;
+%  - or partial application (unqualified term)
+%    (e.g., '$meta_exp'(goal, append(X,Y,Z), _), '$meta_exp'(pred(2), append(X), _), etc.)
+% TODO: define next to callable/1?
+'$pa_env'(PA, ShEnv) :-
+    nonvar(PA), PA = '$:'(PA1),
+    nonvar(PA1), PA1 = 'PAEnv'(ShEnv, _).
+
+% ---------------------------------------------------------------------------
+
+% (like hiord_rt:call/2 but does not allow meta-expansion)
+:- export('$pa_call'/2).
+:- impl_defined('$pa_call'/2).
+
+% (internal, see fsyntaxplus and pl2wam)
+:- export('$pa_def'/4).
+:- impl_defined('$pa_def'/4).
+   
+% ---------------------------------------------------------------------------
+:- export(this_module/1).
 :- meta_predicate this_module(addmodule).
 :- impl_defined(this_module/1). % TODO: avoid problems with addmodule and export
 

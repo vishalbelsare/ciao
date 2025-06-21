@@ -9,33 +9,31 @@
 #ifndef _CIAO_ENG_GC_H
 #define _CIAO_ENG_GC_H
 
-CBOOL__PROTO(gc_usage);
-CBOOL__PROTO(gc_mode);
-CBOOL__PROTO(gc_trace);
-CBOOL__PROTO(gc_margin);
-CVOID__PROTO(compressTrail, bool_t from_gc);
-CVOID__PROTO(GarbageCollect);
+#include <ciao/eng.h>
 
-CVOID__PROTO(choice_overflow, intmach_t pad);
+extern bool_t current_gcmode;
+#define GCTRACE__OFF 0
+#define GCTRACE__TERSE 1
+#define GCTRACE__VERBOSE 2
+extern intmach_t current_gctrace;
+extern intmach_t current_gcmargin;
+#if defined(OPTIM_COMP)
+#define GCMARGIN_CHARS ((intmach_t)(current_gcmargin*1024*(sizeof(tagged_t)/4)))
+#else
+#define GCMARGIN_CHARS ((intmach_t)(current_gcmargin*1024))
+#endif
+
+void init_gc(void);
+
+CVOID__PROTO(trail__compress, bool_t from_gc);
+
+CVOID__PROTO(choice_overflow, intmach_t pad, bool_t remove_trail_uncond);
 CVOID__PROTO(stack_overflow);
 CBOOL__PROTO(gc_start);
 CVOID__PROTO(heap_overflow, intmach_t pad);
 CVOID__PROTO(collect_goals_from_trail, intmach_t wake_count);
-CVOID__PROTO(trail_gc);
-CBOOL__PROTO(stack_shift_usage);
-CBOOL__PROTO(termheap_usage);
-CBOOL__PROTO(envstack_usage);
-CBOOL__PROTO(choice_usage);
-CBOOL__PROTO(trail_usage);
 CVOID__PROTO(explicit_heap_overflow, intmach_t pad, intmach_t arity);
 
-#if defined(ANDPARALLEL)
-//bool_t is_rem_Hterm(tagged_t term, worker_t *w, worker_t *remote_w);
-CVOID__PROTO(heap_overflow_adjust_wam,
-             intmach_t reloc_factor, tagged_t *newh, bool_t remote_reloc, worker_t *remote_worker);
-#else
-CVOID__PROTO(heap_overflow_adjust_wam, intmach_t reloc_factor, tagged_t *newh);
-#endif
 CVOID__PROTO(stack_overflow_adjust_wam, intmach_t reloc_factor);
 
 /* --------------------------------------------------------------------------- */
@@ -46,7 +44,7 @@ CVOID__PROTO(stack_overflow_adjust_wam, intmach_t reloc_factor);
 #define TEST_HEAP_OVERFLOW(H, AMOUNT, ARITY) ({ \
   if (HeapCharAvailable((H)) < (AMOUNT)) { \
     G->heap_top = (H); \
-    CVOID__CALL(explicit_heap_overflow, (AMOUNT), (ARITY)); \
+    CVOID__CALL(explicit_heap_overflow, (AMOUNT)*2, (ARITY)); \
     (H) = G->heap_top; \
   } \
 })
@@ -79,17 +77,44 @@ CVOID__PROTO(stack_overflow_adjust_wam, intmach_t reloc_factor);
   CONCAT(POP_GC,GCLen) GCRegs; \
 })
 
+#if defined(OPTIM_COMP)
+#define ENSURE_LIVEINFO \
+  RTCHECK({if (w->liveinfo == NULL) { PANIC_FAULT("null liveinfo"); }})
+#else
+#if defined(DEBUG_TRACE)
+#define ENSURE_LIVEINFO ({ \
+  if (w->liveinfo == NULL) { PANIC_FAULT("null liveinfo"); } \
+})
+#else
+#define ENSURE_LIVEINFO
+#endif
+#endif
+
+/* Heap_Warn that considers LIVEINFO__HEAP */
+#define Heap_Warn_GC Heap_Warn_Pad(LIVEINFO__HEAP(w->liveinfo))
+
 /* Call explicit_heap_overflow, where additional arguments are GC roots. */
 #define HeapOverflow_GC(REQ, ...) HeapOverflow_GC_(REQ, VA_NARGS(__VA_ARGS__), (__VA_ARGS__)) 
 #define HeapOverflow_GC_(REQ, GCLen, GCRegs) ({ \
   intmach_t idx_ MAYBE_UNUSED = LIVEINFO__ARITY(w->liveinfo); \
   CONCAT(SAVE_XS,GCLen) GCRegs; \
-  CVOID__CALL(explicit_heap_overflow, (REQ)+LIVEINFO__HEAP(w->liveinfo), LIVEINFO__ARITY(w->liveinfo) + GCLen); \
+  CVOID__CALL(explicit_heap_overflow, 2*((REQ)+LIVEINFO__HEAP(w->liveinfo)), LIVEINFO__ARITY(w->liveinfo) + GCLen); \
   CONCAT(RESTORE_XS,GCLen) GCRegs; \
 })
 
+/* Call explicit_heap_overflow if needed, where additional arguments are GC roots. */
+/* TODO:[JF] HeapOverflow_GC uses 2*REQ in HeapOverflow_GC for bignums, needed for term_basic.c? */
+#define HeapMargin_GC(REQ, ...) HeapMargin_GC_(REQ, VA_NARGS(__VA_ARGS__), (__VA_ARGS__)) 
+#define HeapMargin_GC_(REQ, GCLen, GCRegs) ({ \
+  ENSURE_LIVEINFO; \
+  intmach_t req_ = (REQ); \
+  if (HeapCharDifference(w->heap_top,Heap_Warn_GC)<req_) { \
+    HeapOverflow_GC_(req_, GCLen, GCRegs); \
+  } \
+})
+
 /* TODO: improve LIVEINFO support? */
-/* TODO: document why a->term[0] is reserved for TaggedZero (see eng_gc.c) */
+/* TODO: document why a->x[0] is reserved for TaggedZero (see eng_gc.c) */
 /* TODO: use a frame instead of temporary X beyond liveinfo arity? */
 
 #define SAVE_XS0() {}
@@ -99,16 +124,16 @@ CVOID__PROTO(stack_overflow_adjust_wam, intmach_t reloc_factor);
 #define RESTORE_XS1(V0) { V0=X(idx_); }
 #define RESTORE_XS2(V0,V1) { V0=X(idx_); V1=X(idx_+1); }
 
-#define SAVE_YS1(V0) { frame_t *a=w->frame; a->term[0]=TaggedZero; a->term[1]=V0; }
-#define SAVE_YS2(V0,V1) { frame_t *a=w->frame; a->term[0]=TaggedZero; a->term[1]=V0; a->term[2]=V1; }
-#define RESTORE_YS1(V0) { frame_t *a=w->frame; V0=a->term[1]; }
-#define RESTORE_YS2(V0,V1) { frame_t *a=w->frame; V0=a->term[1]; V1=a->term[2]; }
+#define SAVE_YS1(V0) { frame_t *a=G->frame; a->x[0]=TaggedZero; a->x[1]=V0; }
+#define SAVE_YS2(V0,V1) { frame_t *a=G->frame; a->x[0]=TaggedZero; a->x[1]=V0; a->x[2]=V1; }
+#define RESTORE_YS1(V0) { frame_t *a=G->frame; V0=a->x[1]; }
+#define RESTORE_YS2(V0,V1) { frame_t *a=G->frame; V0=a->x[1]; V1=a->x[2]; }
 
 #if defined(CONTCODE) /* TODO: always? */
 static inline CVOID__PROTO(push_gc_frame, intmach_t i) {
   choice_t *b = w->choice;
   frame_t *a;
-  ComputeA(a,b);
+  GetFrameTop(a,b,G->frame);
   a->frame = w->frame;
   a->next_insn = w->next_insn;
   w->frame = a;

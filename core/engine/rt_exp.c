@@ -5,12 +5,6 @@
  *  Copyright (C) 2020 The Ciao Development Team
  */
 
-#if defined(DEBUG)
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/types.h>                                    /* For getpid() */
-#endif
-
 #include <string.h>
 
 #include <ciao/eng.h>
@@ -18,7 +12,6 @@
 #include <ciao/internals.h>
 #include <ciao/dynamic_rt.h>
 #include <ciao/rt_exp.h>
-#include <ciao/runtime_control.h>
 #include <ciao/eng_gc.h>
 #include <ciao/eng_profile.h>
 #include <ciao/basiccontrol.h>
@@ -42,7 +35,7 @@ CBOOL__PROTO(current_predicate)
     return TRUE;
   }
 
-  X(2) = MakeSmall(SwitchSize(*predicates_location));
+  X(2) = MakeSmall(HASHTAB_SIZE(*predicates_location));
   X(3) = PointerToTerm(*predicates_location);
   push_choicept(Arg,address_nd_current_predicate);
   return nd_current_predicate(Arg);
@@ -50,8 +43,8 @@ CBOOL__PROTO(current_predicate)
 
 CBOOL__PROTO(nd_current_predicate)
 {
-  sw_on_key_t *table = (sw_on_key_t *)TermToPointer(X(3));
-  sw_on_key_node_t *keyval;
+  hashtab_t *table = TermToPointer(hashtab_t, X(3));
+  hashtab_node_t *keyval;
   intmach_t j = GetSmall(X(2));
   definition_t *d;
   tagged_t mask = (IsVar(X(0)) ? 0 : INDEXMASK);
@@ -64,7 +57,7 @@ CBOOL__PROTO(nd_current_predicate)
       if (j==0)
         pop_choicept(Arg);
       else
-        w->choice->term[2] = MakeSmall(j);
+        w->choice->x[2] = MakeSmall(j);
       CBOOL__UnifyCons(d->printname,X(0));
       CBOOL__LASTUNIFY(make_structure(Arg,SetArity(d->printname,d->arity)), X(1));
     }
@@ -106,7 +99,7 @@ CBOOL__PROTO(predicate_property)
     return TRUE;
   }
 
-  X(3) = MakeSmall(SwitchSize(*predicates_location));
+  X(3) = MakeSmall(HASHTAB_SIZE(*predicates_location));
   X(4) = PointerToTerm(*predicates_location);
   push_choicept(Arg,address_nd_predicate_property);
   return nd_predicate_property(Arg);
@@ -114,9 +107,9 @@ CBOOL__PROTO(predicate_property)
 
 CBOOL__PROTO(nd_predicate_property)
 {
-  sw_on_key_t *table = (sw_on_key_t *)TermToPointer(X(4));
+  hashtab_t *table = TermToPointer(hashtab_t, X(4));
   intmach_t j = GetSmall(X(3));
-  sw_on_key_node_t *keyval;
+  hashtab_node_t *keyval;
   definition_t *d;
 
   for (--j; j>=0; --j)
@@ -128,7 +121,7 @@ CBOOL__PROTO(nd_predicate_property)
           if (j==0)
             pop_choicept(Arg);
           else
-            w->choice->term[3] = MakeSmall(j);
+            w->choice->x[3] = MakeSmall(j);
           CBOOL__UnifyCons(MakeSmall(d->predtyp),X(1));
           CBOOL__UnifyCons(MakeSmall(predicate_property_bits(d)),X(2));
           CBOOL__LASTUNIFY(make_structure(Arg,SetArity(d->printname,d->arity)), X(0));

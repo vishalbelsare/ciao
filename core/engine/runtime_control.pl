@@ -47,7 +47,7 @@
 
 @begin{description}
 
-@item{@tt{version}} The Ciao version, as a term
+@item{@tt{version_data}} The Ciao version, as a term
       @tt{ciao}(@var{Version},@var{Patch},@var{CommitInfo}).
       @var{Version} and @var{Patch} are atoms.  @var{CommitInfo} is a
       structure describing the commit information (branch, id, date,
@@ -87,8 +87,12 @@
 @item{@tt{integer_rounding_function}} It is @tt{toward_zero}, so that
       @tt{-1 =:= -3//2} succeeds.  Unchangeable.  @iso
 
-@item{@tt{max_arity}} It is 255, so that no compound term (or predicate)
-      can have more than this number of arguments.  Unchangeable.  @iso
+@item{@tt{max_arity}} Currently, it is 255 in 32-bits or 134217727 in
+      64-bits, so that no compound term can have more than this number
+      of arguments.  Unchangeable.  @iso
+
+@item{@tt{max_procedure_arity}} It is 255, so that no predicate
+      can have more than this number of arguments.  Unchangeable.
 
 @item{@tt{quiet}} Controls which messages issued using the
       @lib{messages_basic} library are actually written.  As the
@@ -367,6 +371,28 @@ symbol_result([A, B]):- int(A), int(B).
  %% memory_option(heap).
 
 % ---------------------------------------------------------------------------
+
+:- use_module(engine(io_basic), [display/1]).
+
+:- export(time/1).
+:- meta_predicate time(goal).
+:- pred time(G) # "Execute @var{G} and print runtime statistics to the
+   user, for each solution.".
+
+time(G) :-
+    time_(G, T),
+    Ts is T/1000.0,
+    display('% '), display(Ts), display(' seconds\n').
+
+% TODO: use once/1 (and document) or fix statistics for measuring time to get next solution
+:- meta_predicate time_(goal,?).
+time_(G, T) :-
+    statistics(runtime, [T0|_]),
+    call(G),
+    statistics(runtime, [T1|_]),
+    T is T1-T0.
+
+% ---------------------------------------------------------------------------
 :- export(current_atom/1).
 :- trust pred current_atom(Atom) : var => atm
    # "Enumerates on backtracking all the existing atoms in the
@@ -459,8 +485,8 @@ append([X|Xs], Ys, [X|Zs]) :- append(Xs, Ys, Zs).
     @pred{predicate_property/2} implementation").
 
 % TODO: This was disabled (it should not) --JFMC
-%:- primitive_meta_predicate(predicate_property(fact,?)).
-:- primitive_meta_predicate(predicate_property(fact,addmodule)).
+%:- meta_predicate(predicate_property(primitive(fact),?)).
+:- meta_predicate predicate_property(primitive(fact),addmodule).
 
 :- test predicate_property(Head, Prop) :
     ( Head = true ) => ( Prop = compiled )
@@ -710,7 +736,8 @@ prolog_flag_2(main_module, Old, New) :- % TODO: why?
 prolog_flag_2(bounded, false, false). % ISO 
 prolog_flag_2(double_quotes, chars, chars). % ISO
 prolog_flag_2(integer_rounding_function, toward_zero, toward_zero). % ISO
-prolog_flag_2(max_arity, 255, 255). % ISO
+prolog_flag_2(max_arity, X, X) :- '$max_arity'(X). % ISO (for terms)
+prolog_flag_2(max_procedure_arity, 255, 255). % not ISO (for predicates) 
 prolog_flag_2(Flag, Old, New) :-
     define_flag(Flag, Values, Default),
     flag_value(Old, New, Values),

@@ -26,6 +26,7 @@
 :- module(fd_range_finite_intervals,
     [
         fd_range_type/1,
+        fd_const_spec/1,
         fd_range_bound_t/1,
         fd_range_t/1,
 
@@ -63,7 +64,7 @@
 
         in_range/2
     ],
-    [assertions, regtypes,  fsyntax, dcg]).
+    [assertions, modes, regtypes,  fsyntax, dcg]).
 
 :- doc(title, "Sparse integer ranges implemented as list of intervals").
 
@@ -89,7 +90,11 @@ fd_range_type(prolog_finite_interval_list).
 %% Types, Creators and Accessors
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+fd_const_spec := ~int | inf | sup.
+
 % Our range bounds are closed integers
+
+:- regtype fd_range_bound_t/1.
 
 fd_range_bound_t := ~int.
 
@@ -101,8 +106,8 @@ fd_interval_t([(X,Y)|L]) :-
     fd_range_bound_t(Y),
     fd_interval_t(L).
 
-% :- regtype fd_range_t/1 #
-%       "Data Structure for Sparse Ranges with Singleton".
+:- regtype fd_range_t/1 #
+      "Data Structure for Sparse Ranges with Singleton".
 
 % TODO: Specify well the type.
 fd_range_t(X) :-

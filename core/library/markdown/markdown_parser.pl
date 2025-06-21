@@ -453,14 +453,18 @@ parse_front1(Layout, EmptyAbove, Envs) -->
 parse_front1(Layout, _EmptyAbove, Envs) -->
     % (backtick-based code block)
     sc_col(Col),
-    sc_str("```"),
+    { Fence = "````"
+    ; Fence = "```"
+    ; Fence = "~~~"
+    },
+    sc_str(Fence),
     skip_blanks_nonl,
-    match_cmdname(LangStr0), % ('' if none)
+    match_lang_id(LangStr0), % ('' if none)
     skip_blanks_nonl,
     sc_nl,
     !,
     { LangStr0 = "" -> LangStr = "text" ; LangStr = LangStr0 },
-    parse_backtick_block(CodeBlock0),
+    parse_backtick_block(CodeBlock0, Fence),
     { tidy_blanks(Col, CodeBlock0, CodeBlock) },
     { Envs = [env(codeblock(LangStr), CodeBlock)|Envs0] },
     %
@@ -536,6 +540,13 @@ detect_code_cmd(Text, Cmd) :-
 %! match_front_cmd(?Cmd):
 %    Match a valid front command `Cmd`.
 
+% Hack to avoid parsing @author{...} as a front command
+% TODO: better solution!
+match_front_cmd(_Cmd) -->
+    sc_char(C), { cmdchar(C) },
+    sc_str("author{"),
+    !,
+    { fail }.
 % A front command
 match_front_cmd(Cmd) -->
     sc_char(C), { cmdchar(C) },
@@ -641,20 +652,20 @@ parse_indented_block(_BaseCol, []) -->
     % Nothing else, finish
     [].
 
-parse_backtick_block(Block) -->
+parse_backtick_block(Block, Fence) -->
     % End
     ( sc_nl ; [] ),
-    sc_col(Col), { Col = 0 }, % match ^\s*```
+    sc_col(Col), { Col = 0 }, % match ^\s*``` (or other Fence)
     skip_blanks_nonl,
-    sc_str("```"),
+    sc_str(Fence),
     !,
     { Block = [] }.
-parse_backtick_block(Block) -->
+parse_backtick_block(Block, Fence) -->
     sc_char(C),
     !,
     { Block = [C|Block0] },
-    parse_backtick_block(Block0).
-parse_backtick_block([]) -->
+    parse_backtick_block(Block0, Fence).
+parse_backtick_block([], _) -->
     % Nothing else, finish
     [].
 
@@ -667,6 +678,11 @@ parse_indented_term(Layout, Term) -->
         []
     ; { throw(could_not_parse_term(Block)) }
     ).
+
+% Match language identifier in fenced code block
+match_lang_id([C|Cs]) --> sc_char(C), { \+ is_blank_or_nl(C) }, !,
+    match_lang_id(Cs).
+match_lang_id([]) --> [].
 
 % ---------------------------------------------------------------------------
 % Match a valid identifier for LPdoc command names

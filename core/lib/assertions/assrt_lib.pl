@@ -82,7 +82,7 @@ library @lib{compiler/c_itf}.
 :- use_module(library(lists), [member/2]).
 :- use_module(library(system), [fmode/2,chmod/2,delete_file/1]).
 :- use_module(library(compiler/translation), 
-    [expand_clause/6,del_goal_trans/1,del_clause_trans/1]).
+    [expand_clause/7,del_goal_trans/1,del_clause_trans/1]).
 
 %% ---------------------------------------------------------------------------
 :- pred asr_version/1 :: int # "Contains a version number which identifies
@@ -326,7 +326,7 @@ process_file_assertions_(Base,Opts):-
     %% Second translation -PBC
     activate_translation(Base,M,add_clause_trans),
     activate_translation(Base,M,add_goal_trans),
-    expand_clause(0,0,M,_,_,_), % Translator initialization
+    expand_clause(before_mexp,0,0,M,_,_,_), % Translator initialization
     save_clause_of(Base,M),
     save_use_pkg(Base,M),
     %% deactivate translations
@@ -341,7 +341,7 @@ save_clause_of(Base,M):-
         B=Body
     ; % do the "second expansion"
 %         messages_basic:message(user, ['{Original: ',(Head:-Body)]),
-      expand_clause(Head,Body,M,VarNames,H,B)
+      expand_clause(before_mexp,Head,Body,M,VarNames,H,B)
 %         ,messages_basic:message(user, ['{Expanded: ',(H:-B)])
     ),
     % one more patch!!
@@ -584,8 +584,8 @@ del_assertion_of(PD,M,AStatus,AType,NNAss,Dict,S,LB,LE) :-
    a term of the same functor and arity as the predicate it represents
    (i.e., it is not in Functor/Arity format). @var{Body} is always
    normalized (but the properties or property conjunctions inside may
-   not -- see @pred{normalize_assertions_pass_one/1} and
-   @pred{normalize_assertions_pass_two/1}.".
+   not be -- see @pred{normalize_assertions_pass_one/1} and
+   @pred{normalize_assertions_pass_two/1}).".
 
 :- data assertion_read/9. 
 

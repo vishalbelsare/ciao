@@ -31,7 +31,7 @@ program or implicitly imposed by the solver.  As soon as variables get
 an empty domain the computation fails, hence forcing backtracking.
 
 The package defines basic operators, automatically imports basic
-constraints and enumerating predicates form the module
+constraints and enumerating predicates from the module
 @lib{clpfd_rt}, and provides high-level
 @ref{Meta-Constraints} through a transparent compilation process.
 
@@ -51,7 +51,7 @@ variable remaining free in the query. This domain should not be
 understood as values permitted for the corresponding variable, but
 only as values not excluded by the incomplete propagation mechanism of
 the solver. Note that the answer output by the top-level is by itself
-incomplete as the remaining constraints are not showed. 
+incomplete as the remaining constraints are not shown. 
 
 
 @section{Meta-Constraints}
@@ -63,7 +63,7 @@ equal), @pred{#\\\\=/2} (constraint not equal), @pred{#</2}
 greater or equal). These meta-constraints are
 defined over arithmetic expressions with FD variables (see regular type
 @pred{fd_expr/1} in module @lib{clpfd_rt}.).  Such constraints are
-\"meta\" in the sens that their arguments are interpreted at
+\"meta\" in the sense that their arguments are interpreted at
 compile-time and all variables occurring free in the arguments will be
 implicitly constrained to take integer values only. In particular, note
 that variables constrained in such a way would not be unifiable with 
@@ -104,9 +104,7 @@ The main call is @tt{queens(N, L, Lab)} which looks for a solution
 the call to @tt{labeling/2} at the end of definition of @tt{queens/3},
 which tries to find a solution for the problem.
 
-@begin{verbatim}
-@includeverbatim{clpfd/examples/queens.pl}
-@end{verbatim}
+@includecode{clpfd/examples/queens.pl}
 
 ").
 

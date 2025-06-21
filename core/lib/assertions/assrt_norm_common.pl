@@ -243,6 +243,7 @@ assertion_format(test,    X) :- assrt_format_code(X). %% For unit-test -- EMM
 %%assertion_format(type,    g). %% Added for now to put typedef there...
 %% assertion_format(compat,  d). %% Not using these as basic any more?!
 assertion_format(calls,   c).
+assertion_format(calls,   t).
 assertion_format(success, s).
 %% Entry for unit-test -- EMM
 assertion_format(texec,   g).
@@ -277,6 +278,7 @@ assrt_format_code(t).
 %% MH: No comments allowed now in basic assertions (difficult to document).
 
 % ------------ A  B   C  D  E --FormatId--------------------------- %ABCDE
+% TODO:[xsyntax] new :: and => priorities
 norm_body((PD::DP:CP=>AP+GP#CO),p,(PD::DP  :CP  =>AP  +GP  #CO)):-!.%11111
 norm_body((PD::DP:CP=>AP+GP   ),p,(PD::DP  :CP  =>AP  +GP  #"")):-!.%11110
 norm_body((PD::DP:CP=>AP   #CO),p,(PD::DP  :CP  =>AP  +true#CO)):-!.%11101
@@ -294,10 +296,12 @@ norm_body((PD::DP       +GP   ),p,(PD::DP  :true=>true+GP  #"")):-!.%10010
 norm_body((PD::DP          #CO),d,(PD::DP  :true=>true+true#CO)):-!.%10001
 norm_body((PD::DP             ),d,(PD::DP  :true=>true+true#"")):-!.%10000
 norm_body((PD    :CP=>AP+GP#CO),p,(PD::true:CP  =>AP  +GP  #CO)):-!.%01111
+norm_body((PD    :CP=>AP+GP   ),s,(PD::true:CP  =>AP  +GP  #"")):- GP = srcloc(_Src,_LB,_LE), !.%01110
 norm_body((PD    :CP=>AP+GP   ),p,(PD::true:CP  =>AP  +GP  #"")):-!.%01110
 norm_body((PD    :CP=>AP   #CO),s,(PD::true:CP  =>AP  +true#CO)):-!.%01101
 norm_body((PD    :CP=>AP      ),s,(PD::true:CP  =>AP  +true#"")):-!.%01100
 norm_body((PD    :CP    +GP#CO),g,(PD::true:CP  =>true+GP  #CO)):-!.%01011
+norm_body((PD    :CP    +GP   ),c,(PD::true:CP  =>true+GP  #"")):- GP = srcloc(_Src,_LB,_LE), !.%01010
 norm_body((PD    :CP    +GP   ),g,(PD::true:CP  =>true+GP  #"")):-!.%01010
 norm_body((PD    :CP       #CO),c,(PD::true:CP  =>true+true#CO)):-!.%01001
 norm_body((PD    :CP          ),c,(PD::true:CP  =>true+true#"")):-!.%01000
@@ -429,6 +433,10 @@ transform_head_arg_props(
 get_arg_props(PDA,PDA,D-D,C-C,A-A,G-G,_NPD,_F,_A,_M,_Opts,_AType,_S,_LB,_LE) :-
     var(PDA),
     !.
+% TODO: ignore modes in test assertions (this is needed for p_unit handling of assertions; but the unittest lib does in a different way; merge!)
+get_arg_props(PDA,PDA,D-D,C-C,A-A,G-G,_NPD,_F,_A,_M,_Opts,AType,_S,_LB,_LE) :-
+    AType = test,
+    !.
 %% Argument is a defined (possibly parametric) mode, 
 get_arg_props(PDA,NPDA,NDP,NCP,NAP,NGP,NPD,_F,_A,M,Opts,AType,S,LB,LE) :-
     with_or_without_arg(PDA,NNPDA,Prop),
@@ -443,6 +451,7 @@ get_arg_props(PDA,NPDA,NDP,NCP,NAP,NGP,NPD,_F,_A,M,Opts,AType,S,LB,LE) :-
        NPDA = PDA, NDP=DL-DL, NCP=CL-CL, NAP=AL-AL, NGP=GL-GL
     ;  %% Assumed that the Props have already been put in list form!
        NPDA = NNPDA,
+       % TODO:[xsyntax] new :: and => priorities
        NPropAss= ((_Prop::CompatProps:CallProps=>AnswerProps+GoalProps#_)),
        !,
        resolve_applications(CompatProps,ACompatProps,S,LB,LE),

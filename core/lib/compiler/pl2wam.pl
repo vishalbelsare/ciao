@@ -5,6 +5,8 @@
     set_compiler_out/1,
     compile_clause/2,
     compile_clause_in_mode/3,
+    mod_declaration/1,
+    mod_declaration_in_mode/2,
     proc_declaration/4,
     proc_declaration_in_mode/5,
     cleanup_compilation_data/0
@@ -13,18 +15,18 @@
 :- use_module(engine(stream_basic)).
 :- use_module(engine(io_basic)).
 :- use_module(engine(messages_basic), [message/2]).
-:- use_module(library(iso_misc), [compound/1]).
 :- use_module(library(sort)).
 :- use_module(library(dict)).
 :- use_module(library(terms), [atom_concat/2]).
-:- use_module(library(write), [portray_clause/2]). % for wam output
+:- use_module(library(write), [portray_clause/2]). % for wamql.pl, 'wam' compile_file_emit
 :- use_module(library(lists), 
     [append/3, length/2, dlist/3, list_lookup/3,
      contains1/2, nocontainsx/2, contains_ro/2, nonsingle/1,
      intset_insert/3, intset_delete/3, intset_in/2, intset_sequence/3]).
 :- use_module(engine(internals), 
     [poversion/1, '$make_bytecode_object'/4, '$compiled_clause'/4,
-     '$interpreted_clause'/2, '$set_property'/2, '$define_predicate'/2]).
+     '$interpreted_clause'/2, '$set_property'/2, '$define_predicate'/2,
+     '$set_currmod'/1]).
 :- use_module(engine(internals), [module_concat/3]).
 :- use_module(engine(runtime_control), [module_split/3]).
 
@@ -33,8 +35,6 @@
 % TODO: temporarily imported (so that incore_mode_of/2 can be updated
 %   for subdefs -- incore_mode_of/2 should be in internals)
 :- use_module(library(compiler/c_itf), [incore_mode_of/2]).
-
-:- set_prolog_flag(multi_arity_warnings, off).
 
 /*** B_GAUGE
 :- include(gauge_aux).
@@ -65,6 +65,9 @@ E_GAUGE ***/
 %               builtin_1(Name,Arg1);
 %               builtin_2(Name,Arg1,Arg2);
 %               builtin_3(Name,Arg1,Arg2,Arg3);
+%               builtin_1_env(Name,Arg1,N,EffAr); % [JF] new (but unused)
+%               builtin_2_env(Name,Arg1,Arg2,N,EffAr); % [JF] new
+%               builtin_3_env(Name,Arg1,Arg2,Arg3,N,EffAr); % [JF] new
 %               function_1(Name,Value,Arg1,N,EffAr);
 %               function_2(Name,Value,Arg1,Arg2,N,EffAr);
 %               put_x_variable(Arg,Arg);
@@ -156,14 +159,10 @@ E_GAUGE ***/
 %new_x_offset(37).
 
 % jf-new
-reset_counter(Module0) :-
+reset_counter(Module) :-
     retractall_fact(counter(_)),
     retractall_fact(counter_module(_)),
     asserta_fact(counter(0)),
-    ( Module0 = user(Base) ->
-        atom_concat('user$$$', Base, Module)
-    ; Module0 = Module
-    ),
     asserta_fact(counter_module(Module)).
 
 set_compiler_mode(Mode) :- asserta_fact(compiler_mode(Mode)).
@@ -200,6 +199,15 @@ define_predicate_mode(M) :-
     arg(1, Mode, M).
 
 
+mod_declaration(Mod) :-
+    compile_file_emit(set_currmod(Mod)).
+
+mod_declaration_in_mode(Mode, Mod) :-
+    asserta_fact(compiler_mode(Mode), Ref),
+    mod_declaration(Mod),
+    erase(Ref).
+
+
 proc_declaration(Decl, P, F, A) :-
     \+ (Decl = multifile, current_fact('$predicate'(P,F/A,_))),
     \+ current_fact('$compiled'(P,_,_)), !,
@@ -226,17 +234,17 @@ cleanup_compilation_data :-
 
 compile_file_emit(Item) :-
     compiler_mode(Mode), !,
-    compile_file_emit(Mode, Item).
+    compile_file_emit_(Mode, Item).
 
-compile_file_emit(ql(_), Item) :-
+compile_file_emit_(ql(_), Item) :-
     compiler_out(S),
     ql_compile_file_emit(Item, S).
-compile_file_emit(incore(_), Item) :-
+compile_file_emit_(incore(_), Item) :-
     incore_compile_file_emit(Item).
-compile_file_emit(incoreql(_), Item) :-
+compile_file_emit_(incoreql(_), Item) :-
     compiler_out(S),
     incore_ql_compile_file_emit(Item, S).
-compile_file_emit(wam, Item) :-
+compile_file_emit_(wam, Item) :-
     compiler_out(S),
     wam_compile_file_emit(Item, S).
 
@@ -248,7 +256,7 @@ compile_all(H, B, Profiled) :-
     wam_clause_name(ClName0, ClName),
     asserta_fact('$compiled'(F,ClName,Data)), !.
 compile_all(H, B, _) :-
-    message(warning, [H,' :- ',B,' - clause failed to compile}']).
+    message(warning, [''(H),' :- ',''(B),' - clause failed to compile}']).
 
 wam_clause_name(Name/Ar/0, Name/Ar/I) :-
     functor(F, Name, Ar),
@@ -276,6 +284,8 @@ get_clause_id(structure(Name,Args), No, Name/Ar/No) :-
 % clause name.  Note that the Module parameter is not redundant (for
 % example in multifile clauses or user prolog files.
 
+mangle_clause(Module, aux, MangledName) :- !,
+    module_concat(Module,'aux$$',MangledName). % TODO: add pred name?
 mangle_clause(Module, Name/Ar/No, MangledName) :-
     module_split(Name,_,Pred),
     !,
@@ -325,23 +335,85 @@ E_GAUGE ***/
 %-----------------------------------------------------------------------------
 % Make second-level structures, open up disjunctions, take care of cut.
 
-% safe_structure(structure(F,Args), S) :- atom(F), S=..[F|Args].
-
 structure(structure(F,Args), S) :- S=..[F|Args].
 
 parse_clause(H, B, [parsed_clause(structure(Fu,Args),Pbody,Ch1,0)], Prof) :-
-    functor(H, Fu, _),
+    functor(H, Fu, Ar),
     parse_body(B, outer, B1),
     (   Prof=unprofiled -> B1 = B2
 /*** B_GAUGE
     ;   insert_counters(B1, B2)
 E_GAUGE ***/
     ),
-    trans_args(1, H, Args, Dic),
+    trans_args(1, Ar, H, Args, Dic),
     trans_term(Ch, Ch1, Dic),
     trans_goal(B2, Pbody, 'basiccontrol:CUT IDIOM'(Ch), Dic).
 
+:- compilation_fact(optim_pa). % optimize predicate abstractions
+
 parse_body(P, _, 'hiord_rt:call'(P)) :- var(P), !.
+% (predicate abstractions)
+parse_body('hiord_rt:$pa_def'(dynamic, ShVs, PACode, V), _, G) :- !,
+    parse_body('hiord_rt:$pa_def'(static, ShVs, PACode, PA), outer, G1),
+    G = 'basiccontrol:,'(G1,'term_basic:='(PA,V)).
+:- if(defined(optim_pa)).
+% TODO:[oc-merge] see static_predabs in optim-comp
+parse_body('hiord_rt:$pa_def'(static, ShVs, PACode, PA), _, G) :- !,
+    % (emit auxiliary pred for PA code)
+    copy_term(ShVs-PACode, PASh-clause(Head,Body)), % rename all vars
+    % PASh = [S1,...,Sm]
+    functor(Head, F, N), Head =.. [''|Args],                  % Head = F(A1,...,An)
+    append(Args, PASh, ArgsFull), FullHead =.. [''|ArgsFull], % FullHead = F(A1,...,An,S1,...,Sm)
+    %
+    functor(H, F, N), H =.. [''|HArgs],                       % H = F(A1',...,An') (fresh)
+    append(HArgs, PASh, HArgsFull), HFull =.. [''|HArgsFull], % HFull = F(A1',...,An',S1,...,Sm)
+    Cls = [(FullHead :- Body)], % TODO: allow more than one clause
+    %
+    % (emit auxiliary pred for PA code)
+    internal_name(aux, AuxName),
+    HFull =.. [''|HArgsFull],
+    PABody =.. [AuxName|HArgsFull],
+    PA = '$:'('PAEnv'(ShVs, 'PA'(PASh,H,PABody))),
+    ( cyclic_term(ShVs) -> % static recursive PA! (cyclic terms in shared context)
+        % Horrible hack: propagate ShVs into PASh, which will
+        % instantiate all recursive PA (and their shared context)
+        % inside Cls. Then prune those cyclic terms.
+        ShVs = PASh,
+        prune_recpa_cls(Cls, Cls2)
+    ; Cls2 = Cls
+    ),
+    G = 'hiord_rt:AUXPRED IDIOM'(AuxName,Cls2).
+:- else.
+parse_body('hiord_rt:$pa_def'(static, ShVs, PACode, PA), _, G) :- !,
+    % (PA code is interpreted) % TODO: much slower but needed for interpreted code
+    copy_term(ShVs-PACode, PASh-clause(Head,Body)), % rename all vars
+    PA = '$:'('PAEnv'(ShVs, 'PA'(PASh,Head,Body))),
+    G = 'basiccontrol:NOP IDIOM'.
+:- endif.
+% (hiord_rt:call/N and similar)
+parse_body('hiord_rt:$pa_call'(P, PArgs), _, X) :-
+    % (partial evaluate call to a PA known statically)
+    nonvar(P), P = '$:'(A1),
+    nonvar(A1), A1 = 'PAEnv'(ShVs, PA),
+    nonvar(PA), PA = 'PA'(PASh,Head,Body),
+    !,
+    ( cyclic_term(ShVs) -> % static recursive PA!
+        % (cyclic terms in shared context) Horrible hack: prune cyclic
+        % terms from both lists of shared variables and goals
+        prune_recpa_list(ShVs, ShVs0),
+        prune_recpa_list(PASh, PASh0),
+        prune_recpa_g(Head, Head0),
+        prune_recpa_g(Body, Body0),
+        copy_term(PASh0-Head0-Body0, ShVs0-PArgs-Body2)
+    ; copy_term(PASh-Head-Body, ShVs-PArgs-Body2)
+    ),
+    X = Body2.
+parse_body('hiord_rt:$pa_call'(P0,Args), _, G) :- !,
+    % length(Args,N), G = 'basiccontrol:,'('internals:rt_module_exp'(PA0,pred(N),M,-,true,PA), CallG),
+    G = 'basiccontrol:,'('term_basic:='('$:'(P), P0), CallG), % no rt_module_exp, only PA
+    parse_body('hiord_rt:call'(P,Args), outer, CallG).
+parse_body('hiord_rt:call'(P,''), _, 'hiord_rt:call'(P)) :- !. % (optimize call/n)
+%
 %parse_body('aggregates:^'(V,P0), _, 'aggregates:^'(V,P)) :- !,
 %       parse_body(P0, outer, P).
 parse_body('basiccontrol:false', _, 'basiccontrol:fail') :- !.
@@ -368,6 +440,24 @@ parse_body('basiccontrol:if'(P0,Q0,R0), _,
     parse_body(R0, outer, R).
 parse_body(P, _, P).
 
+prune_recpa_cls([], []).
+prune_recpa_cls([(H :- B)|Cls], [(H2 :- B)|Cls2]) :-
+    prune_recpa_g(H, H2),
+    prune_recpa_cls(Cls, Cls2).
+
+prune_recpa_g(G0, G) :-
+    G0 =.. [N|Args0],
+    prune_recpa_list(Args0, Args),
+    G =.. [N|Args].
+
+prune_recpa_list([], []).
+prune_recpa_list([X|Xs], Ys) :-
+    nonvar(X), X = '$:'(_), cyclic_term(X),
+    !,
+    prune_recpa_list(Xs, Ys).
+prune_recpa_list([X|Xs], [X|Ys]) :-
+    prune_recpa_list(Xs, Ys).
+
 parse_negate_goal('term_typing:var'(X), 'term_typing:nonvar'(X)) :- !.
 parse_negate_goal('term_typing:nonvar'(X), 'term_typing:var'(X)) :- !.
 parse_negate_goal('term_compare:=='(X,Y), 'term_compare:\\=='(X,Y)) :- !.
@@ -382,6 +472,9 @@ parse_negate_goal(P, 'basiccontrol:;'('basiccontrol:->'(P, 'basiccontrol:fail'),
 %       trans_goal(Goal, S, Cut, Dic).
 trans_goal('basiccontrol:!', Tran, Cut, Dic) :- !,
     trans_term(Cut, Tran, Dic).
+trans_goal('hiord_rt:AUXPRED IDIOM'(N, Cls), S, _Cut, _Dic) :- !,
+    trans_auxcls(Cls, N, TCls),
+    S = structure_AUXCLS(TCls).
 trans_goal('basiccontrol:;'(X,Y), S, Cut, Dic) :- !,
     structure(S, 'basiccontrol:;'(X1,Y1)),
     trans_goal(X, X1, Cut, Dic),
@@ -395,15 +488,15 @@ trans_goal('basiccontrol:,'(X,Y), S, Cut, Dic) :- !,
     trans_goal(X, X1, Cut, Dic),
     trans_goal(Y, Y1, Cut, Dic).
 trans_goal(X, structure(Fu,Args), _, Dic) :-
-    functor(X, Fu, _),
-    trans_args(1, X, Args, Dic).
+    functor(X, Fu, Ar),
+    trans_args(1, Ar, X, Args, Dic).
 
-trans_args(I, Term, [X1|Args], Dic) :-
-    compound(Term),
-    arg(I, Term, X), !,
+trans_args(I, Ar, Term, [X1|Args], Dic) :- I =< Ar, !,
+    arg(I, Term, X),
     trans_term(X, X1, Dic),
-    I1 is I+1, trans_args(I1, Term, Args, Dic).
-trans_args(_, _, [], _).
+    I1 is I+1,
+    trans_args(I1, Ar, Term, Args, Dic).
+trans_args(_, _, _, [], _).
 
 trans_term(V, Tran, Dic) :-
     var(V), !,
@@ -417,8 +510,16 @@ trans_term(C, Tran, _) :-
     atomic(C), !,
     Tran=constant(C).
 trans_term(X, structure(Fu,Args), Dic) :- 
-    functor(X, Fu, _),
-    trans_args(1, X, Args, Dic).
+    functor(X, Fu, Ar),
+    trans_args(1, Ar, X, Args, Dic).
+
+trans_auxcls([], _, []).
+trans_auxcls([(H :- B)|Cls], N, TCls) :-
+    H =.. [''|Args],
+    H0 =.. [N|Args],
+    parse_clause(H0, B, Parsed1, unprofiled),
+    append(Parsed1, TCls0, TCls),
+    trans_auxcls(Cls, N, TCls0).
 
 %-----------------------------------------------------------------------------
 % Given a clause, break off separate predicates for special forms such as
@@ -429,18 +530,21 @@ transform_clause(Head, Body0, Choice, TypeKey, Body, ClName) -->
                    TypeKey, Body1, [])},
     transform_clause_1(Head, Body1, Choice, Body, ClName).
 
-transform_clause_1(Head, Body1, Choice, body(Choice,Head,Body2), _) -->
-    {simple_body(Body1, Body2), !,
-     allocate_temps(Choice),
+transform_clause_1(Head, Body1, Choice, body(Choice,Head,Body2), ClName) -->
+    { simple_body(Body1, Body1b) }, !,
+    straight_body(Body1b, -, Body2, ClName, 0, 1), % (for auxcls)
+    {allocate_temps(Choice),
      allocate_temps(Head),
      allocate_temps_body(Body2)}.
 transform_clause_1(Head, Body1, Choice, body(Choice,Head,Body2), ClName) -->
     {mk_occurrences_list([inline(list(Choice,Head))|Body1], 0, 0, List)},
-    straight_body(Body1, List, Body2, ClName, 0, 1, 1),
+    straight_body(Body1, List, Body2, ClName, 0, 1),
     {allocate_vas(List, 0)}.
-        
 
 simple_body([], []) :- !.
+simple_body([Goal|Body0], [Goal|Body]) :-
+    Goal = auxcls(_), !,
+    simple_body(Body0, Body).
 simple_body([Goal|Body0], [Goal|Body]) :-
     Goal = inline(_), !,
     simple_body(Body0, Body).
@@ -452,10 +556,12 @@ simple_body(Body0, Body) :-
     ;   Body = Body0
     ).
 
-straight_goal('basiccontrol:,'(X1, X2), _, Flag, Head, TK0, TK) --> !,
+straight_goal_('basiccontrol:NOP IDIOM', _, _, _, TK0, TK) --> !, % like true/0 but do not generate any call % TODO: not used, but useful
+    { TK = TK0 }.
+straight_goal_('basiccontrol:,'(X1, X2), _, Flag, Head, TK0, TK) --> !,
     straight_goal(X1, Flag, Head, TK0, TK1),
     straight_goal(X2, Flag, Head, TK1, TK).
-straight_goal('basiccontrol:CUT IDIOM'(X), S, Flag, structure(_, Args), TK0, TK) -->
+straight_goal_('basiccontrol:CUT IDIOM'(X), S, Flag, structure(_, Args), TK0, TK) -->
     {var(Flag),
      trivial_head(Args, []),
      TK0 = type_key(Type0, Key),
@@ -463,14 +569,14 @@ straight_goal('basiccontrol:CUT IDIOM'(X), S, Flag, structure(_, Args), TK0, TK)
      Type =\= Type0,
      TK = type_key(Type, Key)},
     (   {nocontainsx(Args, X)}
-    ;   straight_goal(Flag, inline(S))
+    ;   straight_goal_item(Flag, inline(S))
     ), !.
 /*** B_GAUGE
-straight_goal('PROFILE POINT'(_), S, _, _, TK, TK) -->
+straight_goal_('PROFILE POINT'(_), S, _, _, TK, TK) -->
     !,
-    straight_goal(_, inline(S)).
+    straight_goal_item(_, inline(S)).
 E_GAUGE ***/
-straight_goal(Goal, S, Flag, structure(_, Args), TK0, TK) -->
+straight_goal_(Goal, S, Flag, structure(_, Args), TK0, TK) -->
     {var(Flag),
      type_ck(Goal, Args, Type1, Auto),
      TK0 = type_key(Type0, Key),
@@ -481,19 +587,22 @@ straight_goal(Goal, S, Flag, structure(_, Args), TK0, TK) -->
          Type is Type0/\Type1}
     ;   {inline_codable(Goal)},
         {Type is Type0/\(Type1\/1)},
-        straight_goal(Flag, inline(S))
+        straight_goal_item(Flag, inline(S))
     ), !.
-straight_goal(Goal, S, Flag, _, TK, TK) -->
+straight_goal_(Goal, S, Flag, _, TK, TK) -->
     (   {inline_codable(Goal)},
-        straight_goal(Flag, inline(S))
-    ;   straight_goal(Flag, pcall(S,_))
+        straight_goal_item(Flag, inline(S))
+    ;   straight_goal_item(Flag, pcall(S,_))
     ), !.
 
+straight_goal(structure_AUXCLS(Cls), _Flag, _Head, TK0, TK) --> !,
+    { TK = TK0 },
+    [auxcls(Cls)].
 straight_goal(S, Flag, Head, TK0, TK) -->
     {structure(S, Goal)},
-    straight_goal(Goal, S, Flag, Head, TK0, TK).
+    straight_goal_(Goal, S, Flag, Head, TK0, TK).
 
-straight_goal(flag, Item) --> [Item].
+straight_goal_item(flag, Item) --> [Item].
 
 type_ck('term_typing:var'(X), [Y|_], 2'1, 1) :- X==Y.
 type_ck('attributes:get_attribute'(X,_), [Y|_], 2'1, 0) :- X==Y.     % DMCAI -- ATTRVARS
@@ -523,31 +632,31 @@ trivial_head([X|Xs], Seen) :-
     nocontainsx(Seen, X),
     trivial_head(Xs, [X|Seen]).
 
-straight_body([], _, [], _, _, _, _) --> [].
-straight_body([inline(Fu)|Gs], List,
-           [inline(Fu)|Gs1], ClName, Chn, Gn, SubNo) --> !,
+straight_body([], _, [], _, _, _) --> [].
+straight_body([auxcls(Cls)|Gs], List, Gs1, ClName, Chn, Gn) --> !,
+    straight_auxcls(Cls, 0),
+    straight_body(Gs, List, Gs1, ClName, Chn, Gn).
+straight_body([inline(Fu)|Gs], List, [inline(Fu)|Gs1], ClName, Chn, Gn) --> !,
     {Gn1 is Gn+1},
-    straight_body(Gs, List, Gs1, ClName, Chn, Gn1, SubNo).
-straight_body([pcall(S, Size)|Gs], List,
-          [pcall(S1, Size)|Gs1], ClName, Chn, Gn, SubNo) -->
+    straight_body(Gs, List, Gs1, ClName, Chn, Gn1).
+straight_body([pcall(S, Size)|Gs], List, [pcall(S1, Size)|Gs1], ClName, Chn, Gn) -->
     {structure(S, 'basiccontrol:;'(G1,G2)), !,
      internal_name(ClName, SubName), % jf-new solve multifile bug
      internal_predicate(List, Chn-Gn, SubName, S1), % jf-new solve multifile bug
 %jf-old  internal_predicate(List, Chn-Gn, ClName-SubNo, S1),
      structure(G1, F1),
      structure(G2, F2)},
-    straight_body(F1, left, S1, 0, No),
-    straight_body(F2, right, S1, No, _),
+    straight_body_(F1, left, S1, 0, No),
+    straight_body_(F2, right, S1, No, _),
     {Chn1 is Chn+1},
-    {SubNo1 is SubNo+1},
-    straight_body(Gs, List, Gs1, ClName, Chn1, 0, SubNo1).
-straight_body([Goal|Gs], List, [Goal|Gs1], ClName, Chn, _, SubNo) -->
+    straight_body(Gs, List, Gs1, ClName, Chn1, 0).
+straight_body([Goal|Gs], List, [Goal|Gs1], ClName, Chn, _) -->
     {Chn1 is Chn+1},
-    straight_body(Gs, List, Gs1, ClName, Chn1, 0, SubNo).
+    straight_body(Gs, List, Gs1, ClName, Chn1, 0).
 
 % jf-new solve multifile bug (hmm, that's temporary code)
 :- data counter/1. 
-:- data counter_module/1.
+:- data counter_module/1. % (flatten module name)
 internal_name(ClName,SubName) :- !,
     current_fact(counter_module(Module)),
     current_fact(counter(Counter)),
@@ -569,13 +678,13 @@ linking_vars([V-Occs|List], Gn) -->
 linking_vars([_|List], Gn) -->
     linking_vars(List, Gn).
 
-straight_body('basiccontrol:fail', right, _, No, No) --> !.
-straight_body('basiccontrol:;'(G1,G2), right, Head, No0, No) --> !,
+straight_body_('basiccontrol:fail', right, _, No, No) --> !.
+straight_body_('basiccontrol:;'(G1,G2), right, Head, No0, No) --> !,
     {structure(G1, F1),
      structure(G2, F2)},
-    straight_body(F1, left, Head, No0, No1),
-    straight_body(F2, right, Head, No1, No).
-straight_body('basiccontrol:->'(If, Then), _, Head, No0, No) --> !,
+    straight_body_(F1, left, Head, No0, No1),
+    straight_body_(F2, right, Head, No1, No).
+straight_body_('basiccontrol:->'(If, Then), _, Head, No0, No) --> !,
     {No is No0+1},
     {copy_goal_and_head('basiccontrol:->'(If, Then), Head,
      'basiccontrol:->'(If1, Then1), Head1),
@@ -583,7 +692,7 @@ straight_body('basiccontrol:->'(If, Then), _, Head, No0, No) --> !,
      structure(B2, 'basiccontrol:,'(B1,Then1)),
      structure(S2, 'basiccontrol:,'(If1,B2))},
     [parsed_clause(Head1, S2, var(C1,C2), No)].
-straight_body(Goal, _, Head, No0, No) -->
+straight_body_(Goal, _, Head, No0, No) -->
     {No is No0+1},
     {structure(S, Goal)},
     {copy_goal_and_head(S, Head, S1, Head1)},
@@ -592,9 +701,18 @@ straight_body(Goal, _, Head, No0, No) -->
 copy_goal_and_head(S, structure(F,L), S1, structure(F,L1)) :-
     copy_term(S-L, S1-L1).
 
+% (copy term and number clauses)
+straight_auxcls([], _) --> [].
+straight_auxcls([parsed_clause(H,B,Ch,_)|Cls], No0) -->
+    {No is No0+1},
+    [parsed_clause(H, B, Ch, No)],
+    straight_auxcls(Cls, No).
+
 %-----------------------------------------------------------------------------
 % Compute environment sizes, allocate perm. variables.
 mk_occurrences_list([], _, _, _).
+mk_occurrences_list([auxcls(_)|Gs], Chn, Gn, List) :- !,
+    mk_occurrences_list(Gs, Chn, Gn, List).
 mk_occurrences_list([inline(G)|Gs], Chn, Gn, List) :- !,
     Gn1 is Gn+1,
     mk_occurrences_list(Gs, Chn, Gn1, List),
@@ -617,6 +735,7 @@ record_occurrences(list(X,Y), Gn, D) :-
     record_occurrences(Y, Gn, D).
 record_occurrences(structure(_,Args), Gn, D) :-
     record_occurrences_args(Args, Gn, D).
+record_occurrences(structure_AUXCLS(_), _, _).
 record_occurrences(nil, _, _).
 record_occurrences(constant(_), _, _).
 
@@ -642,6 +761,7 @@ allocate_temps(list(X,Y)) :-
     allocate_temps(Y).
 allocate_temps(structure(_,Args)) :-
     allocate_temps_args(Args).
+allocate_temps(structure_AUXCLS(_)).
 
 allocate_temps_args([]).
 allocate_temps_args([X|Xs]) :-
@@ -652,11 +772,11 @@ allocate_vas([], _) :- !.
 allocate_vas([size(N)|List], N) :- !,
     allocate_vas(List, N).
 allocate_vas([var(_,Name)-Occs|List], N0) :-
-    allocate_vas(Name, Occs, N0, N),
+    allocate_vas_(Name, Occs, N0, N),
     allocate_vas(List, N).
 
-allocate_vas('x'(_), Occs, N, N) :- single_chunk(Occs, _), !.
-allocate_vas('y'(N0), _, N0, N) :- N is N0+1.
+allocate_vas_('x'(_), Occs, N, N) :- single_chunk(Occs, _), !.
+allocate_vas_('y'(N0), _, N0, N) :- N is N0+1.
 
 single_chunk([], _) :- !.
 single_chunk([Chn-_|Occs], Chn) :-
@@ -681,7 +801,7 @@ link_unit(Pred) :-
 */
 index_internals([]) :- !.
 index_internals(InternalData) :-
-    index_internals(InternalData, Pred, Clauses, Residue, Code, []),
+    index_internals_(InternalData, Pred, Clauses, Residue, Code, []),
     compile_file_emit(predicate(Pred,Clauses,Code)),
     index_internals(Residue).
 /*
@@ -690,7 +810,7 @@ index_predicate(Pred, Clauses) -->
      collect_clauses(F, Pred, no, Use, 1, Clauses)},
     index_collected_clauses(Use, Clauses).
 */
-index_internals(Items, Pred, Clauses, Residue) -->
+index_internals_(Items, Pred, Clauses, Residue) -->
     {internal_clauses(Items, no, Use, Clauses, Pred, Residue)},
     index_collected_clauses(Use, Clauses).
 
@@ -785,12 +905,12 @@ items_clauses([Clause-_|Items], [Clause|Clauses]) :-
 appropriate_items(_, [], []) :- !.
 appropriate_items(Type, [C|Cs], [C|Out]) :-
     appropriate_clause_item(Type, _, C), !,
-    appropriate_items(Type, Cs, Out, C).
+    appropriate_items_(Type, Cs, Out, C).
 appropriate_items(Type, [_|Cs], Out) :-
     appropriate_items(Type, Cs, Out).
 
-appropriate_items(Type, _, [], C) :- last_clause_for_key(C, Type), !.
-appropriate_items(Type, Cs, Out, _) :- appropriate_items(Type, Cs, Out).
+appropriate_items_(Type, _, [], C) :- last_clause_for_key(C, Type), !.
+appropriate_items_(Type, Cs, Out, _) :- appropriate_items(Type, Cs, Out).
 
 appropriate_clause_item(Type, Key, _-Data) :-
     index_data(type, Data, Type1),
@@ -811,13 +931,13 @@ trans_clause(Profiled, Body, Code, TypeKey0, TypeKey) :-
     extract_index(Code0, Code1, TypeKey0, TypeKey1, Gets, Gets, OutArity),
     clause_lifetime(Profiled, Kind, InArity, OutArity,
                     [ensure_space(Kind, InArity, _)|Code1], Live, Code2),
-    trans_clause(Live, TypeKey1, TypeKey),
+    trans_clause_(Live, TypeKey1, TypeKey),
     peep_clause(Kind, Code2, Code3, []),
     peep_counters(Profiled, Code3, Code).
 
-trans_clause([-1|_], type_key(Type0,Key), type_key(Type,Key)) :- !,
+trans_clause_([-1|_], type_key(Type0,Key), type_key(Type,Key)) :- !,
     Type is Type0\/2'1000000.
-trans_clause(_, TypeKey, TypeKey).
+trans_clause_(_, TypeKey, TypeKey).
 
 /*** I_GAUGE
 % peep_counters/3 defined in another file
@@ -905,10 +1025,10 @@ E_GAUGE ***/
 merge_insn_tails([], [], O1, O1, O2, O2, O3, O3, +).
 merge_insn_tails([I|Is], [J|Js], O1h, O1t, O2h, O2t, O3h, O3t, X) :-
     merge_insn_tails(Is, Js, O1a, O1t, O2a, O2t, O3a, O3t, X0),
-    merge_insn_tails(X0, X, I, J, O1h, O1a, O2h, O2a, O3h, O3a).
+    merge_insn_tails_(X0, X, I, J, O1h, O1a, O2h, O2a, O3h, O3a).
 
-merge_insn_tails(+, +, I, I, T1, T1, T2, T2, [I|T3], T3) :- !.
-merge_insn_tails(_, -, I, J, [I|T1], T1, [J|T2], T2, T3, T3).
+merge_insn_tails_(+, +, I, I, T1, T1, T2, T2, [I|T3], T3) :- !.
+merge_insn_tails_(_, -, I, J, [I|T1], T1, [J|T2], T2, T3, T3).
 
 /*** B_GAUGE
 copy_profile(
@@ -970,6 +1090,16 @@ index_insn(get_large(K,0), get_large_x0(K), Type, Key) :-
 index_insn(get_structure(S,0), get_structure_x0(S), 2'10001, S).
 index_insn(get_nil(0), get_nil_x0, 2'101, []).
 index_insn(get_list(0), get_list_x0, 2'1001, '.'/2).
+% TODO:[merge-oc] disable X0 optimization?
+%%% index_insn(get_constant(K,0), get_constant(K,0), Type, Key) :- 
+%%%     type_of_constant(K, Type),
+%%%     key_of_constant(K, Key).
+%%% index_insn(get_large(K,0), get_large(K,0), Type, Key) :- 
+%%%     type_of_constant(K, Type),
+%%%     key_of_constant(K, Key).
+%%% index_insn(get_structure(S,0), get_structure(S,0), 2'10001, S).
+%%% index_insn(get_nil(0), get_nil(0), 2'101, []).
+%%% index_insn(get_list(0), get_list(0), 2'1001, '.'/2).
 
 
 /*  extract_index(C0, C1, TK0, TK, Y0, Y) :-
@@ -1146,7 +1276,7 @@ open_code(Builtin, Dic) -->
 open_code(Builtin, Dic) -->
     {name_of_builtin(Builtin, Name, X)}, !,
     c_put_arg(X, Xreg, 1000, Dic, _),
-    [builtin_1(Name, Xreg)].
+    ( { builtin_use_env(Builtin) } -> [builtin_1_env(Name, Xreg, _, _)] ; [builtin_1(Name, Xreg)] ).
 open_code(Builtin, Dic) -->
     {name_of_builtin(Builtin, Name, X, Y)}, !,
     (   {eval_builtin(Builtin)} ->
@@ -1158,13 +1288,13 @@ open_code(Builtin, Dic) -->
          c_put_arg(X, Xreg, 1000, Dic, _),
          c_put_arg(Y, Yreg, 1000, Dic, _)
     ),
-    [builtin_2(Name, Xreg, Yreg)].
+    ( { builtin_use_env(Builtin) } -> [builtin_2_env(Name, Xreg, Yreg, _, _)] ; [builtin_2(Name, Xreg, Yreg)] ).
 open_code(Builtin, Dic) -->
-    {name_of_builtin(Builtin, Name, X, Y, Z)},
+    {name_of_builtin(Builtin, Name, X, Y, Z)}, !,
     c_put_arg(X, Xreg, 1000, Dic, _),
     c_put_arg(Y, Yreg, 1000, Dic, _),
     c_put_arg(Z, Zreg, 1000, Dic, _),
-    [builtin_3(Name, Xreg, Yreg, Zreg)].
+    ( { builtin_use_env(Builtin) } -> [builtin_3_env(Name, Xreg, Yreg, Zreg, _, _)] ; [builtin_3(Name, Xreg, Yreg, Zreg)] ).
 
 c_expr_top(Expr0, Expr, Dic) -->
     {c_expr(Expr0, Expr, Dic, S0, S),
@@ -1332,6 +1462,7 @@ c_profiled_guards(Fu, Kind, Gs, N0, N, Dic) -->
 E_GAUGE ***/
 
 builtin_uses_heap('arithmetic:is'(_,_)).
+builtin_uses_heap(Builtin) :- builtin_use_env(Builtin).
 builtin_uses_heap(Fu) :-
     eval_builtin(Fu),
     arg(1, Fu, structure(_,_)).
@@ -1421,40 +1552,40 @@ goal_arguments_var([_|Args], I, Size, Dic0, Dic) -->
 % Linearize term before emitting 'get' + 'put' + 'unify'.
 
 flat(S, V, GP) -->
-    flat(S, V, GP, 1, 0, _).
+    flat_(S, V, GP, 1, 0, _).
 
-flat(var(D,V), var(D,V), _, _, C, C) --> !.
-flat(constant(K), S1, GP, 0, _, 1) -->
+flat_(var(D,V), var(D,V), _, _, C, C) --> !.
+flat_(constant(K), S1, GP, 0, _, 1) -->
     {large_heap_usage(K, _), !,
      (GP=put -> G=g; true),
      S1 = var(G,'x'(T))},
     ['term_basic:='(T,constant(K))].        
-flat(constant(K), constant(K), _, _, C, C) --> !.
-flat(nil, nil, _, _, C, C) --> !.
-flat(S, S1, get, 0, _, 1) --> !,
+flat_(constant(K), constant(K), _, _, C, C) --> !.
+flat_(nil, nil, _, _, C, C) --> !.
+flat_(S, S1, get, 0, _, 1) --> !,
     {S1 = var(_,'x'(T))},
     ['term_basic:='(T,S2)],
     flat(S, S2, get).
-flat(S, S1, put, 0, _, 1) --> !,
+flat_(S, S1, put, 0, _, 1) --> !,
     {S1 = var(g,'x'(T))},
     flat(S, S2, put),
     ['term_basic:='(T,S2)].
-flat(list(A,B), list(A1,B1), GP, N, C0, C) -->
+flat_(list(A,B), list(A1,B1), GP, N, C0, C) -->
     {N1 is N-1},
-    flat(A, A1, GP, N1, 0, C1),
+    flat_(A, A1, GP, N1, 0, C1),
     {N2 is N-C1,
      C2 is C0\/C1},
-    flat(B, B1, GP, N2, C2, C).
-flat(structure(S,L), structure(S,L1), GP, N, C0, C) -->
+    flat_(B, B1, GP, N2, C2, C).
+flat_(structure(S,L), structure(S,L1), GP, N, C0, C) -->
     flat_args(L, L1, GP, N, 0, C0, C).
 
 flat_args([X], [X1], GP, N, C0, C1, C) --> !,
     {N1 is N-C0,
      C2 is C0\/C1},
-    flat(X, X1, GP, N1, C2, C).
+    flat_(X, X1, GP, N1, C2, C).
 flat_args([X|Xs], [X1|Xs1], GP, N, C0, C1, C) -->
     {N1 is N-1},
-    flat(X, X1, GP, N1, C0, C2),
+    flat_(X, X1, GP, N1, C0, C2),
     flat_args(Xs, Xs1, GP, N, C2, C1, C).
 
 
@@ -1462,18 +1593,18 @@ flat_args([X|Xs], [X1|Xs1], GP, N, C0, C1, C) -->
 % First linearize goal argument.
 c_get_arg(list(A,B), V, Dic) --> !,
     {flat(list(A,B), S1, get, S, [])},
-    c_get(['term_basic:='(V,S1)|S], Dic).
+    c_get_s(['term_basic:='(V,S1)|S], Dic).
 c_get_arg(structure(A,L), V, Dic) --> !,
     {flat(structure(A,L), S1, get, S, [])},
-    c_get(['term_basic:='(V,S1)|S], Dic).
+    c_get_s(['term_basic:='(V,S1)|S], Dic).
 c_get_arg(X, V, Dic) -->
     c_get(X, V, Dic).
 
 % Using X registers as a cache for Y values and constants.
-c_get([], _) --> [].
-c_get(['term_basic:='(V,X)|R], Dic) -->
+c_get_s([], _) --> [].
+c_get_s(['term_basic:='(V,X)|R], Dic) -->
     c_get(X, V, Dic),
-    c_get(R, Dic).
+    c_get_s(R, Dic).
 
 c_get(var(D,N), V, Dic) -->
     {var(D)}, !,
@@ -1504,17 +1635,17 @@ c_get(structure(F,Args), V, Dic) -->
 % First linearize goal argument.
 c_put_arg(list(A,B), V, Size, Dic0, Dic) --> !,
     {flat(list(A,B), S1, put, S, ['term_basic:='(V,S1)])},
-    c_put(S, Size, Dic0, Dic).
+    c_put_s(S, Size, Dic0, Dic).
 c_put_arg(structure(A,L), V, Size, Dic0, Dic) --> !,
     {flat(structure(A,L), S1, put, S, ['term_basic:='(V,S1)])},
-    c_put(S, Size, Dic0, Dic).
+    c_put_s(S, Size, Dic0, Dic).
 c_put_arg(X, V, Size, Dic0, Dic) -->
     c_put(X, V, Size, Dic0, Dic).
 
-c_put([], _, Dic, Dic) --> [].
-c_put(['term_basic:='(V,X)|R], Size, Dic0, Dic) -->
+c_put_s([], _, Dic, Dic) --> [].
+c_put_s(['term_basic:='(V,X)|R], Size, Dic0, Dic) -->
     c_put(X, V, Size, Dic0, Dic1),
-    c_put(R, Size, Dic1, Dic).
+    c_put_s(R, Size, Dic1, Dic).
 
 c_put(var(D,N), V, _, Dic, Dic1) -->
     {var(D)}, !,
@@ -1645,23 +1776,23 @@ guard_def_use_list(I, DUlist0, DUlist, Moves0, Heap, Map) -->
 guard_def_use(x_d0u0, DUs, DUs, Moves, Moves, _) :- !.
 guard_def_use(x_d1u1p(X1,X2), DUs0, DUs, Moves0, Moves, Map) :- !,
     compare(C, X1, X2),
-    guard_def_use(C, X1, X2, DUs0, DUs, Moves0, Moves, Map).
+    guard_def_use_(C, X1, X2, DUs0, DUs, Moves0, Moves, Map).
 guard_def_use(DU, [DU|DUs], DUs, Moves, Moves, _).
 
-guard_def_use(<, T, R, DUs0, DUs, Moves0, Moves, Map) :-
+guard_def_use_(<, T, R, DUs0, DUs, Moves0, Moves, Map) :-
     var(T), !,
     DUs0 = [x_d1u1p(T,R)|DUs],
     Moves0 = [alias(T,R,Titem,Ritem)|Moves],
     dic_lookup(Map, T, Titem),
     dic_lookup(Map, R, Ritem).
-guard_def_use(>, R, T, DUs0, DUs, Moves0, Moves, Map) :-
+guard_def_use_(>, R, T, DUs0, DUs, Moves0, Moves, Map) :-
     var(T), !,
     DUs0 = [x_d1u1p(R,T)|DUs],
     Moves0 = [alias(T,R,Titem,Ritem)|Moves],
     dic_lookup(Map, T, Titem),
     dic_lookup(Map, R, Ritem).
-guard_def_use(=, _, _, DUs, DUs, Moves, Moves, _) :- !.
-guard_def_use(_, X1, X2, [x_d1u1p(X1,X2)|DUs], DUs, Moves, Moves, _).
+guard_def_use_(=, _, _, DUs, DUs, Moves, Moves, _) :- !.
+guard_def_use_(_, X1, X2, [x_d1u1p(X1,X2)|DUs], DUs, Moves, Moves, _).
 
 
 guard_allocate([], _, Set, Set).
@@ -1680,11 +1811,11 @@ check_eq(T, _) :- var(T), !.
 % check_eq(T1-T1, _) :- !.
 check_eq(T1-T2, [Rhead|Rtail]) :-
     check_eq_last(Rtail, Rhead, R1-R2, [S1-S2|_]),
-    check_eq(T1, T2, R1, R2, S1, S2).
+    check_eq_(T1, T2, R1, R2, S1, S2).
 
-check_eq(A, B, void, B, _, A) :- !.
-check_eq(A, B, A, C, B, C) :- B =< C, !.
-check_eq(B, C, A, C, A, B) :- A =< B.
+check_eq_(A, B, void, B, _, A) :- !.
+check_eq_(A, B, A, C, B, C) :- B =< C, !.
+check_eq_(B, C, A, C, A, B) :- A =< B.
 
 check_eq_last(Tail0, Head0, Head, Tail) :- var(Tail0), !,
     Head0=Head,
@@ -1693,48 +1824,60 @@ check_eq_last([Head0|Tail0], _, Head, Tail) :-
     check_eq_last(Tail0, Head0, Head, Tail).
 
 lifetime_map(_, Map) :- var(Map), !.
-lifetime_map(DUs, Map) :- lifetime_map(DUs, 0, Map).
+lifetime_map(DUs, Map) :- lifetime_map_(DUs, 0, Map).
 
-lifetime_map([], _, _).
-lifetime_map([DU|DUs], I, Map) :-
-    lifetime_map(DU, I, I1, Map),
-    lifetime_map(DUs, I1, Map).
+lifetime_map_([], _, _).
+lifetime_map_([DU|DUs], I, Map) :-
+    lifetime_map__(DU, I, I1, Map),
+    lifetime_map_(DUs, I1, Map).
 
-lifetime_map(x_d0u0, I, I, _).
-lifetime_map(x_d0u1(A), I, I1, Map) :-
+lifetime_map__(x_d0u0, I, I, _).
+lifetime_map__(x_d0u1(A), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_u(A, I, Map).
-lifetime_map(x_d0u2(A,B), I, I1, Map) :-
+lifetime_map__(x_d0u2(A,B), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_u(A, I, Map),
     lifetime_map_u(B, I, Map).
-lifetime_map(x_d0u3(A,B,C), I, I1, Map) :-
+lifetime_map__(x_d0u3(A,B,C), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_u(A, I, Map),
     lifetime_map_u(B, I, Map),
     lifetime_map_u(C, I, Map).
-lifetime_map(x_d0un(A), I, I1, Map) :-
+lifetime_map__(x_d0u1live(A,_), I, I1, Map) :-
+    I1 is I-1,
+    lifetime_map_u(A, I, Map).
+lifetime_map__(x_d0u2live(A,B,_), I, I1, Map) :-
+    I1 is I-1,
+    lifetime_map_u(A, I, Map),
+    lifetime_map_u(B, I, Map).
+lifetime_map__(x_d0u3live(A,B,C,_), I, I1, Map) :-
+    I1 is I-1,
+    lifetime_map_u(A, I, Map),
+    lifetime_map_u(B, I, Map),
+    lifetime_map_u(C, I, Map).
+lifetime_map__(x_d0un(A), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_un(0, A, I, Map).
-lifetime_map(x_d1u0p(A), I, I1, Map) :-
+lifetime_map__(x_d1u0p(A), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_d(A, I, Map).
-lifetime_map(x_d1u0(A), I, I1, Map) :-
+lifetime_map__(x_d1u0(A), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_d(A, I, Map).
-lifetime_map(x_d1u1p(A,B), I, I1, Map) :-
+lifetime_map__(x_d1u1p(A,B), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_move(A, B, I, Map).
-lifetime_map(x_d1u1live(A,B,_), I, I1, Map) :-
+lifetime_map__(x_d1u1live(A,B,_), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_d(A, I, Map),
     lifetime_map_u(B, I, Map).
-lifetime_map(x_d1u2live(A,B,C,_), I, I1, Map) :-
+lifetime_map__(x_d1u2live(A,B,C,_), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_d(A, I, Map),
     lifetime_map_u(B, I, Map),
     lifetime_map_u(C, I, Map).
-lifetime_map(x_d2u0p(A,B), I, I1, Map) :-
+lifetime_map__(x_d2u0p(A,B), I, I1, Map) :-
     I1 is I-1,
     lifetime_map_d(A, I, Map),
     lifetime_map_d(B, I, Map).
@@ -1777,20 +1920,20 @@ lifetime_map_un(A0, A, I, Map) :-
 
 body_lifetime(InArity, Live) -->
     [ensure_space(Kind, _, Heap), I], !,
-    body_lifetime(I, InArity, Live, Kind, Heap),
+    body_lifetime_(I, InArity, Live, Kind, Heap),
     body_lifetime(0, _).
 body_lifetime(_, []) --> [].
 
-body_lifetime(put_x_value(U,U), InArity, Live, Kind, Heap) --> !,
+body_lifetime_(put_x_value(U,U), InArity, Live, Kind, Heap) --> !,
     [I1],
-    body_lifetime(I1, InArity, Live, Kind, Heap).
-body_lifetime(execute('basiccontrol:true'/0), _, [], unit, 128) --> !.
-body_lifetime(I, _, Live, _, 0) -->
+    body_lifetime_(I1, InArity, Live, Kind, Heap).
+body_lifetime_(execute('basiccontrol:true'/0), _, [], unit, 128) --> !.
+body_lifetime_(I, _, Live, _, 0) -->
     {xfer_insn(I, A), !,
      intset_sequence(A, [], Live)}.
-body_lifetime(I, InArity, Live, Kind, Heap) -->
+body_lifetime_(I, InArity, Live, Kind, Heap) -->
     [I1],
-    body_lifetime(I1, InArity, Live1, Kind, Heap0),
+    body_lifetime_(I1, InArity, Live1, Kind, Heap0),
     {x_def_use_heap(I, DU, Heap1),
      insn_heap_usage(I, Heap0),
      Heap is Heap0+Heap1,
@@ -1808,6 +1951,15 @@ simple_x_alloc(x_d0u2(A,B), Set0, Set, Max) :-
     x_alloc(Set0, A, Set1, Max),
     x_alloc(Set1, B, Set, Max).
 simple_x_alloc(x_d0u3(A,B,C), Set0, Set, Max) :-
+    x_alloc(Set0, A, Set1, Max),
+    x_alloc(Set1, B, Set2, Max),
+    x_alloc(Set2, C, Set, Max).
+simple_x_alloc(x_d0u1live(A,Set), Set0, Set, Max) :-
+    x_alloc(Set0, A, Set, Max).
+simple_x_alloc(x_d0u2live(A,B,Set), Set0, Set, Max) :-
+    x_alloc(Set0, A, Set1, Max),
+    x_alloc(Set1, B, Set, Max).
+simple_x_alloc(x_d0u3live(A,B,C,Set), Set0, Set, Max) :-
     x_alloc(Set0, A, Set1, Max),
     x_alloc(Set1, B, Set2, Max),
     x_alloc(Set2, C, Set, Max).
@@ -1909,12 +2061,12 @@ x_def_use_heap(neck(N), x_d0un(N), 0) :- !.
 x_def_use_heap(cut_x(A), x_d0u1(A), 0) :- !.
 x_def_use_heap(function_1(_,V,X,_,L), x_d1u1live(V,X,L), 0) :- !.
 x_def_use_heap(function_2(_,V,X,Y,_,L), x_d1u2live(V,X,Y,L), 0) :- !.
-x_def_use_heap(builtin_1(N,X), x_d0u1(X), H) :- !,
-    builtin_heap_usage(N, H).
-x_def_use_heap(builtin_2(N,X,Y), x_d0u2(X,Y), H) :- !,
-    builtin_heap_usage(N, H).
-x_def_use_heap(builtin_3(N,X,Y,Z), x_d0u3(X,Y,Z), H) :- !,
-    builtin_heap_usage(N, H).
+x_def_use_heap(builtin_1(N,X), x_d0u1(X), H) :- !, builtin_heap_usage(N, H).
+x_def_use_heap(builtin_2(N,X,Y), x_d0u2(X,Y), H) :- !, builtin_heap_usage(N, H).
+x_def_use_heap(builtin_3(N,X,Y,Z), x_d0u3(X,Y,Z), H) :- !, builtin_heap_usage(N, H).
+x_def_use_heap(builtin_1_env(_,X,_,L), x_d0u1live(X,L), 0) :- !.
+x_def_use_heap(builtin_2_env(_,X,Y,_,L), x_d0u2live(X,Y,L), 0) :- !.
+x_def_use_heap(builtin_3_env(_,X,Y,Z,_,L), x_d0u3live(X,Y,Z,L), 0) :- !.
 x_def_use_heap(get_x_variable(V,A), x_d1u1p(V,A), 0) :- !.
 x_def_use_heap(get_y_variable(_,A), x_d0u1(A), 0) :- !.
 x_def_use_heap(get_x_value(V,A), x_d0u2(V,A), 0) :- !.
@@ -1955,6 +2107,9 @@ x_def_use_heap(_, x_d0u0, 0).
 % Which instructions have operands encoding heap requirements?
 insn_heap_usage(function_1(_,_,_,H,_), H) :- !.
 insn_heap_usage(function_2(_,_,_,_,H,_), H) :- !.
+insn_heap_usage(builtin_1_env(_,_,H,_), H) :- !.
+insn_heap_usage(builtin_2_env(_,_,_,H,_), H) :- !.
+insn_heap_usage(builtin_3_env(_,_,_,_,H,_), H) :- !.
 insn_heap_usage(_, _).
 
 large_heap_usage(F, 4) :- float(F), !.
@@ -1982,30 +2137,39 @@ xfer_insn(execute(_/A), A).
 % and cut related instructions.
 
 peep_clause(recursive(_), Code) --> !, peep(Code, noenv, _Dic).
-peep_clause(_, Code) --> peep(Code).
+peep_clause(_, Code) --> peep_noenv(Code).
 
 % simple case: no environments.
-peep([]) --> [].
-peep([Insn|Insns]) --> peep_1(Insn), peep(Insns).
+peep_noenv([]) --> [].
+peep_noenv([Insn|Insns]) --> peep_noenv_1(Insn), peep_noenv(Insns).
 
-peep_1(execute('basiccontrol:true'/0)) --> !, [proceed].
-peep_1(execute('basiccontrol:fail'/0)) --> !, [fail].
-peep_1(cut_x(-1)) --> !, [cutb].
-peep_1(cut_x(X)) --> !, [cutb_x(X)].
-peep_1(get_x_variable(U,U)) --> !, [].
-peep_1(put_x_value(U,U)) --> !, [].
-peep_1(put_x_value(-1,U)) --> !, [choice_x(U)].
-peep_1(put_x_variable(void,void)) --> !, [].
-peep_1(put_x_variable(A,A)) --> !, [put_x_void(A)].
-peep_1(unify_x_variable(void)) --> !, [unify_void].
-peep_1(ensure_space(Kind,EffAr,H)) --> !, emit_ensure_space(Kind, EffAr, H).
-peep_1(Insn) --> peep_heap_usage(Insn).
+peep_noenv_1(execute('basiccontrol:true'/0)) --> !, [proceed].
+peep_noenv_1(execute('basiccontrol:fail'/0)) --> !, [fail].
+peep_noenv_1(cut_x(-1)) --> !, [cutb].
+peep_noenv_1(cut_x(X)) --> !, [cutb_x(X)].
+peep_noenv_1(get_x_variable(U,U)) --> !, [].
+peep_noenv_1(put_x_value(U,U)) --> !, [].
+peep_noenv_1(put_x_value(-1,U)) --> !, [choice_x(U)].
+peep_noenv_1(put_x_variable(void,void)) --> !, [].
+peep_noenv_1(put_x_variable(A,A)) --> !, [put_x_void(A)].
+peep_noenv_1(unify_x_variable(void)) --> !, [unify_void].
+peep_noenv_1(ensure_space(Kind,EffAr,H)) --> !, emit_ensure_space(Kind, EffAr, H).
+peep_noenv_1(Insn) --> peep_heap_usage(Insn).
 
 peep_heap_usage(function_1(A,B,C,H,Set)) --> !,
     [function_1(A,B,C,H,Arity)],
     {live_arity(Set, 0, Arity)}.
 peep_heap_usage(function_2(A,B,C,D,H,Set)) --> !,
     [function_2(A,B,C,D,H,Arity)],
+    {live_arity(Set, 0, Arity)}.
+peep_heap_usage(builtin_1_env(A,B,H,Set)) --> !,
+    [builtin_1_env(A,B,H,Arity)],
+    {live_arity(Set, 0, Arity)}.
+peep_heap_usage(builtin_2_env(A,B,C,H,Set)) --> !,
+    [builtin_2_env(A,B,C,H,Arity)],
+    {live_arity(Set, 0, Arity)}.
+peep_heap_usage(builtin_3_env(A,B,C,D,H,Set)) --> !,
+    [builtin_3_env(A,B,C,D,H,Arity)],
     {live_arity(Set, 0, Arity)}.
 peep_heap_usage(Insn) --> [Insn].
 
@@ -2065,9 +2229,11 @@ peep_1(put_y_variable(Y,A), Env, Env1, _) --> !,
     [put_y_variable(Y,A)].
 peep_1(Insn, Env, Env, _) --> peep_heap_usage(Insn).
 
+% TODO:[arity-limit] depends on MAXPROCARITY1
+% TODO:[arity-limit] compilation errors if arity is not in MAXARITY (MAXARITY1 - 1) bounds
 emit_ensure_space(Kind, EffAr, H) -->
     (   {Kind=cont, H>128} -> [heapmargin_call(H, 0)]
-    ;   {H>1152} -> [heapmargin_call(H, EffAr)]
+    ;   {H>1152} -> [heapmargin_call(H, EffAr)] % 1152=4*256+128 % TODO: relate with eng_terms.h defs
     ;   []
     ).
 

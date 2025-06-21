@@ -1,9 +1,12 @@
-:- op(1150,  fx, (function)).
 :- op(1150,  fx, (fun_eval)).
 :- op(1150,  fx, (fun_return)).
 % Experiment (related to types) --MH
 % :- op(1150, xfx, (:=)).
-:- op(1130, xfx, (:=)).
+% Old := priority
+% :- op(1130, xfx, (:=)).
+% New := priority
+% TODO:[xsyntax] new :: and => priorities
+:- op( 980, xfx, (:=)). % priority between (::) and (,) (must be the same as in statevars.pl)
 :- op(  50,  fx, (~)).
 :- op( 910,  fx, (^^)).
 :- op(  25,  fy, (^)).

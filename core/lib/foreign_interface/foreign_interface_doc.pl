@@ -2,7 +2,7 @@
 :- doc(nodoc,assertions).
 :- doc(nodoc,assertions_basic).
 
-:- doc(title,"C Foreign Language interface").
+:- doc(title,"C Foreign language interface").
 
 :- doc(author, "Jose F. Morales").
 :- doc(author, "Manuel Carro").
@@ -50,6 +50,9 @@ source file(s).
 @item @prop{use_foreign_library/1} specifies the external library(ies)
 to be linked with the foreign sources.
 
+@item @prop{use_foreign_gluecode_header/1} specifies custom header for
+the C gluecode file.
+
 @item @prop{use_compiler/1} specifies the compiler to use.
 
 @item @prop{extra_compiler_opts/1} specifies the additional compiler options. 
@@ -59,8 +62,8 @@ to be linked with the foreign sources.
 @item @prop{extra_linker_opts/1} specifies the additional linker options. 
 @end{itemize}
 
-More details about these options can be found in @ref{Foreign Language
-Interface Properties}.
+More details about these options can be found in @ref{Foreign language
+interface properties}.
 
 The compilation of the foreign sources together with the glue code
 is decomposed into two phases:
@@ -172,8 +175,8 @@ collection of reserved Prolog types (@concept{ctype}s) that reflect C
 types.
 
 The names (and meaning) of the types known for performing that
-translation are to be found in @ref{Foreign Language Interface
-Properties}; they are also summarized below (Prolog types are listed
+translation are to be found in @ref{Foreign language interface
+properties}; they are also summarized below (Prolog types are listed
 first and the corresponding C types after them):
 
 @begin{itemize}
@@ -225,7 +228,7 @@ with zero length) are transformed into the empty list or the null atom
 (@tt{''}).
 
 Most of the work is performed by the predicates in the @ref{Foreign
-Language Interface Builder}, which can be called explicitly by the
+language interface builder}, which can be called explicitly by the
 user.  Doing that is not usually needed, since the Ciao
 Compiler takes care of building glue code files an of compiling and
 linking whatever is necessary.
@@ -263,11 +266,11 @@ or as:
 
 should appear in the C code as
 
-@begin{verbatim}
-void get_int(int *thisint) @{
+```c
+void get_int(int *thisint) {
     ....
-@}
-@end{verbatim}
+}
+```
 
 Note the type of the (single) argument of the function.  Besides, the
 return value of a function can always be used as an output argument,
@@ -291,7 +294,7 @@ the installation directory (the Ciao compiler knowns where it
 has been installed, and gives the C compiler the appropriate flags).
 This @em{non direct correspondence} mode is activated whenever a Ciao
 Prolog type unknown to the foreign interface (i.e., none of those in
-@ref{Foreign Language Interface Properties}) or the type @tt{any_term}
+@ref{Foreign language interface properties}) or the type @tt{any_term}
 (which is explicitly recognized by the foreign language interface) is
 found.  The latter is preferred, as it is much more informative, and
 external tools, such as the the @concept{CiaoPP} preprocessor, can 
@@ -649,9 +652,7 @@ Linux in an Intel processor).
 
 @bf{File} @em{math.pl}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/math/math.pl}
-@end{verbatim}
+@includecode{foreign_interface/examples/math/math.pl}
 
 @subsection{Addresses and C pointers}
 
@@ -668,15 +669,11 @@ directive.
 
 @bf{File} @em{objects.pl}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/addresses/objects.pl}
-@end{verbatim}
+@includecode{foreign_interface/examples/addresses/objects.pl}
 
 @bf{File} @em{objects_c.c}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/addresses/objects_c.c}
-@end{verbatim}
+@includecode{foreign_interface/examples/addresses/objects_c.c}
 
 @subsection{Lists of bytes and arrays}
 
@@ -689,29 +686,21 @@ range 0 to 255 can be passed to C as an array.
 
 @bf{File} @em{byte_lists.pl}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/byte_lists/byte_lists.pl}
-@end{verbatim}
+@includecode{foreign_interface/examples/byte_lists/byte_lists.pl}
 
 @bf{File} @em{bytes_op.c}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/byte_lists/bytes_op.c}
-@end{verbatim}
+@includecode{foreign_interface/examples/byte_lists/bytes_op.c}
 
 @subsection{Lists of integers}
 
 @bf{File} @em{int_lists.pl}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/int_lists/int_lists.pl}
-@end{verbatim}
+@includecode{foreign_interface/examples/int_lists/int_lists.pl}
 
 @bf{File} @em{ints_op.c}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/int_lists/ints_op.c}
-@end{verbatim}
+@includecode{foreign_interface/examples/int_lists/ints_op.c}
 
 @subsection{Strings and atoms}
 
@@ -729,15 +718,11 @@ therefore it should not be freed by Prolog.
 
 @bf{File} @em{strings_and_atoms.pl}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/strings_and_atoms/strings_and_atoms.pl}
-@end{verbatim}
+@includecode{foreign_interface/examples/strings_and_atoms/strings_and_atoms.pl}
 
 @bf{File} @em{str_op.c}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/strings_and_atoms/str_op.c}
-@end{verbatim}
+@includecode{foreign_interface/examples/strings_and_atoms/str_op.c}
 
 @subsection{Arbitrary Terms}
 
@@ -747,15 +732,11 @@ and how it can be manipulated there.
 
 @bf{File} @em{any_term.pl}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/any_term/any_term.pl}
-@end{verbatim}
+@includecode{foreign_interface/examples/any_term/any_term.pl}
 
 @bf{File} @em{any_term_c.c}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/any_term/any_term_c.c}
-@end{verbatim}
+@includecode{foreign_interface/examples/any_term/any_term_c.c}
 
 @subsection{Exceptions}
 
@@ -766,15 +747,11 @@ a exception is raised.
     
 @bf{File} @em{exceptions_example.pl}:
     
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/exceptions/exceptions_example.pl}
-@end{verbatim}
+@includecode{foreign_interface/examples/exceptions/exceptions_example.pl}
 
 @bf{File} @em{exceptions_c.c}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/exceptions/exceptions_c.c}
-@end{verbatim}
+@includecode{foreign_interface/examples/exceptions/exceptions_c.c}
 
 @subsection{Testing number types and using unbounded length integers}
 
@@ -786,15 +763,11 @@ lazy and simpler --and probably slower.
 
 @bf{File} @em{bigints.pl}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/bignums/bigints.pl}
-@end{verbatim}
+@includecode{foreign_interface/examples/bignums/bigints.pl}
 
 @bf{File} @em{bigints_c.c}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/bignums/bigints_c.c}
-@end{verbatim}
+@includecode{foreign_interface/examples/bignums/bigints_c.c}
 
 @subsection{Interfacing with C++}
 
@@ -808,15 +781,11 @@ C++ source files should be declared with their extension.
 
 @bf{File} @em{cc_stack.pl}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/c++/cc_stack.pl}
-@end{verbatim}
+@includecode{foreign_interface/examples/c++/cc_stack.pl}
 
 @bf{File} @em{cc_stack.cc}:
 
-@begin{verbatim}
-@includeverbatim{foreign_interface/examples/c++/cc_stack.cc}
-@end{verbatim}
+@includecode{foreign_interface/examples/c++/cc_stack.cc}
 
 @subsection{Embedding a Ciao engine into a C/C++ application}
 

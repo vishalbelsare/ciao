@@ -74,17 +74,16 @@
    equivalent to @tt{house(_,_,_,_,_)}. The actual zebra puzzle
    specification might include a clause such as:
 
-@noindent
-@begin{verbatim}
+```
 zebra(Owns_zebra, Drinks_water, Street) :-
-   Street = [house$@{@},house$@{@},house$@{@},house$@{@},house$@{@}],
-   member(house$@{nation=>Owns_zebra,pet=>zebra@}, Street),
-   member(house$@{nation=>Drinks_water,drink=>water@}, Street),
-   member(house$@{drink=>coffee,color=>green@}, Street),
-   left_right(house$@{color=>ivory@}, house$@{color=>green@}, Street),
-   member(house$@{car=>porsche,pet=>snails@}, Street),
+    Street = [house${},house${},house${},house${},house${}],
+    member(house${nation=>Owns_zebra,pet=>zebra}, Street),
+    member(house${nation=>Drinks_water,drink=>water}, Street),
+    member(house${drink=>coffee,color=>green}, Street),
+    left_right(house${color=>ivory}, house${color=>green}, Street),
+    member(house${car=>porsche,pet=>snails}, Street),
     ...
-@end{verbatim}
+```
 
    Another syntax supported, useful mainly in declarations to avoid
    specifying the arity, is @tt{house$@{/@}}, which is equivalent in our
@@ -113,39 +112,35 @@ zebra(Owns_zebra, Drinks_water, Street) :-
    at execution time.  
 ".
 
+:- doc(doinclude,'$~'/3).
+
 :- pred $~(Term, Replacement, NewTerm) # "@var{NewTerm} is as @var{Term}
    but with the arguments specified in @var{Replacement} changed (they
    need to be in argnames syntax). The predicate is in fact virtual,
    since it is translated by the package to a pair of unifications.  For
    example, given the declaration @tt{:- argnames house(color, nation,
    pet, drink, car)}, the goal
-@begin{verbatim}
-   $~(House, house$@{car => seat, pet => mouse@}, NewHouse)
-@end{verbatim}
+```
+   $~(House, house${car => seat, pet => mouse}, NewHouse)
+```
  would be compiled to the unifications
-@begin{verbatim}
+```
    House = house(C,N,_,D,_), NewHouse = house(C,N,mouse,D,seat).
-@end{verbatim}".
+```
+".
 
 $~(_,_,_). % todo: change by impl_defined? (jfmc)
 
 :- doc(appendix,"
 
-   Two simple examples of the use of the argnames library package
-   follow.  
+Two simple examples of the use of the argnames library package follow.
 
-    @subsection{Using argument names in a toy database}
+@subsection{Using argument names in a toy database}
 
-@noindent
-@begin{verbatim}
-@includeverbatim{argnames/examples/simple_db}
-@end{verbatim}
+@includecode{argnames/examples/simple_db}
 
-    @subsection{Complete code for the zebra example}
+@subsection{Complete code for the zebra example}
 
-@noindent
-@begin{verbatim}
-@includeverbatim{argnames/examples/zebra_argnames}
-@end{verbatim}
+@includecode{argnames/examples/zebra_argnames}
 
-   ").
+").

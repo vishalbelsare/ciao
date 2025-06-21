@@ -8,8 +8,8 @@
      bytelist/1,
      % byte/1, in_byte/1,
      predname/1, atm_or_atm_list/1, compat/2, inst/2,
-     iso/1, deprecated/1, example/1,
-     not_further_inst/2, sideff/2, regtype/1,
+     iso/1, deprecated/1, srcloc/4, example/1,
+     fails/1, not_further_inst/2, sideff/2, regtype/1,
      native/1, native/2, rtcheck/1, rtcheck/2, no_rtcheck/1, eval/1,
      equiv/2, bind_ins/1, error_free/1, memo/1, filter/2, flag_values/1,
      pe_type/1 ],
@@ -57,9 +57,8 @@
 
 term(_).
 
-:- doc(int/1, "The type of integers. The range of integers is
-    @tt{[-2^2147483616, 2^2147483616)}.  Thus for all practical
-    purposes, the range of integers can be considered infinite.").
+:- doc(int/1, "The type of integers. Integers are unbounded in Ciao
+   and limited by available memory.").
 
 :- trust prop int(T) + (regtype, native) # "@var{T} is an integer.".
 :- trust comp int(T) + sideff(free).
@@ -477,6 +476,16 @@ iso(Goal) :- call(Goal).
 
 deprecated(Goal) :- call(Goal).
 
+:- doc(srcloc/4, "This annotation (pseudo-property) is used to mark
+   that the element (normally assertion) in which it appears was
+   originally between lines @var{LB}-@var{LE} of source file
+   @var{Src}.").
+:- prop srcloc(Goal,Src,LB,LE) + sideff(free).
+
+:- meta_predicate srcloc(Goal,Src,LB,LE).
+
+srcloc(Goal,Src,LB,LE) :- call(Goal), atm(Src), int(LB), int(LE).
+
 
 % TODO: Maybe should go in unittest_props.pl (but some problems in LPdoc)
 :- doc(example/1, "This pseudo-property can be used as a qualifier for
@@ -552,6 +561,16 @@ rtcheck(Goal) :- rtcheck(Goal, complete).
 :- meta_predicate no_rtcheck(goal).
 
 no_rtcheck(Goal) :- rtcheck(Goal, impossible).
+
+:- meta_predicate fails(goal).
+:- prop fails(X) + native
+   # "Calls of the form @var{X} fail.".
+
+:- if(defined(optim_comp)).
+:- '$props'(fails/1, [impnat=indefinable]).
+:- else.
+:- impl_defined(fails/1).
+:- endif.
 
 :- prop not_further_inst(G,V)
     # "@var{V} is not further instantiated.". % by the predicate

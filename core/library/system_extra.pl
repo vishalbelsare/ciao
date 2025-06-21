@@ -276,19 +276,17 @@ compose_backup_filename(FileName, I, B) :-
 
 move_if_diff(From, To, NewOrOld) :-
     % note: NewOrOld is unified at the end to ensure side-effects
-    ( diff_files(From, To) ->
-        del_file_nofail(To),
-        % NOTE: do not use rename_file/2 since it does not work
-        %   across partitions (some Linux systems mount /tmp 
-        %   in a different partition)
-        copy_file(From, To),
+    ( file_exists(To), same_files(From, To) ->
         del_file_nofail(From),
-        NewOrOld = new
-    ; del_file_nofail(From),
-      NewOrOld = old
+        NewOrOld = old
+    ; del_file_nofail(To),
+      % NOTE: do not use rename_file/2 since it does not work
+      %   across partitions (some Linux systems mount /tmp 
+      %   in a different partition)
+      copy_file(From, To),
+      del_file_nofail(From),
+      NewOrOld = new
     ).
-
-diff_files(A, B) :- \+ same_files(A, B).
 
 same_files(A, B) :-
     file_to_string_or_empty(A, AStr),
@@ -297,7 +295,7 @@ same_files(A, B) :-
 
 file_to_string_or_empty(File, Str) :-
     ( catch(file_to_string(File, Str0), _, fail) -> Str = Str0
-    ; Str = ""
+    ; Str = "" % TODO: weird, distinguish errors?
     ).
 
 % ===========================================================================
@@ -767,12 +765,13 @@ relpath__([], Bs, Bs). % Finish with rest
 
 :- doc(section, "Terminal Tools").
 
-:- export(using_tty/0).
-:- pred using_tty # "The standard input is an interactive terminal.".
-% TODO: this implementation is not portable
-% TODO: probably, this should live in other module
-using_tty :-
-    process_call(path(stty), [], [stdout(null), stderr(null), status(0)]).
+% TODO: write in C
+:- export(istty/1).
+:- pred istty(FD) # "Check if the file descriptor is associated with a terminal.".
+istty(FD) :-
+    number_codes(FD, Cs),
+    atom_codes(FDa, Cs),
+    process_call(path(test), ['-t', FDa], [status(0)]).
 
 % ===========================================================================
 

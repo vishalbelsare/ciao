@@ -1,4 +1,5 @@
 :- package(persdb).
+
 :- use_package(datafacts). % TODO: refine?
 :- use_package(library(persdb/persdb_decl)).
 

@@ -9,16 +9,12 @@
 #ifndef _CIAO_OS_THREADS_H
 #define _CIAO_OS_THREADS_H
 
-#if (!defined(OPTIM_COMP))&&(!defined(USE_LOWRTCHECKS))&&defined(DEBUG)
-#define USE_LOWRTCHECKS
-#endif
-
 /* ------------------------------------------------------------------------- */
 /* Locks and conditional variables */
 
 #if !defined(OPTIM_COMP)
 /* If we undefine this, only binary semaphores will be available */
-#define GENERAL_LOCKS
+#define ABSMACH_OPT__general_locks
 #endif
 
 #if !defined(NULL)
@@ -195,7 +191,7 @@ do { if (mips_try_lock(p)) break;                               \
 
 /* ------------------------------------------------------------------------- */
 
-#if defined(LINUX) || defined(Solaris) || defined(DARWIN) || defined(BSD)
+#if defined(LINUX)||defined(EMSCRIPTEN)||defined(Solaris)||defined(DARWIN)||defined(BSD)
 #define HAVE_LIB_LOCKS 1
 
 #include <pthread.h>
@@ -204,7 +200,7 @@ do { if (mips_try_lock(p)) break;                               \
 
 /* Some Solaris machines define _POSIX_PRIORITY_SCHEDULING */
 
-#if defined(_POSIX_PRIORITY_SCHEDULING) && defined(LINUX) || defined(DARWIN) || defined(BSD)
+#if (defined(_POSIX_PRIORITY_SCHEDULING)&&(defined(LINUX)||defined(EMSCRIPTEN)))||defined(DARWIN)||defined(BSD)
 /* 
    Unlike other implementation of threads, pthreads for Linux implements
    threads as user-space processes.
@@ -380,7 +376,7 @@ execution continues when pred() is false.
 
 #define Init_Cond(Cond) Init_lock(Cond.cond_lock)
 #define Wait_For_Cond_Begin(Predicate, Cond) {                     \
-                       bool_t pred_is_signaled;                      \
+                       int pred_is_signaled;                      \
                        Wait_Acquire_Cond_lock(Cond);      \
                        pred_is_signaled = (Predicate);             \
                        while(pred_is_signaled) {                   \
@@ -407,13 +403,13 @@ typedef struct conditionstruct {
 #endif /* USE_THREADS */
 
 #if defined(USE_LOWRTCHECKS) || defined(DEBUG_TRACE)
-bool_t lock_is_unset(LOCK *p);
+int lock_is_unset(LOCK *p);
 #endif
 
 #if defined(USE_LOWRTCHECKS) || defined(DEBUG_TRACE)
 #define GET_INC_COUNTER get_inc_counter()
 #define RESET_COUNTER reset_counter()
-uintmach_t get_inc_counter(void);
+size_t get_inc_counter(void);
 void reset_counter(void);
 #else
 #define GET_INC_COUNTER 0
@@ -432,7 +428,7 @@ void reset_counter(void);
 
 /* ------------------------------------------------------------------------- */
 
-#if defined(DARWIN) || defined(LINUX) || defined(Solaris) || defined(Win32) || defined(BSD)
+#if defined(DARWIN)||defined(LINUX)||defined(EMSCRIPTEN)||defined(Solaris)||defined(Win32)||defined(BSD)
 #define USE_POSIX_THREADS 1
 #endif
 
@@ -473,11 +469,7 @@ typedef void *(*THREAD_START)(void *);
 }
 */
 
-#if defined(OPTIM_COMP)
-void print_syserror(char *s); /* stream_basic.c */
-#else
 void print_syserror(char *s); /* io_basic.c */ 
-#endif
 
 #define Thread_Create_GoalId(Process, Arg, Id, Handle) { \
   if (pthread_create(&(Id), &joinable_thread, Process, Arg)) { \
@@ -493,10 +485,10 @@ void print_syserror(char *s); /* io_basic.c */
 /* TODO: Android NDK (bionic) lacks pthread_cancel(). We replace it by
    pthread_kill() by now but we'd additionally need proper use of
    signals.  See https://github.com/tux-mind/libbthread for
-   details. */
+   details. The use of SIGTERM is probably wrong or incomplete here. */
 #define Allow_Thread_Cancel {}
 #define Disallow_Thread_Cancel {}
-#define Thread_Cancel(Id) pthread_kill(Id)
+#define Thread_Cancel(Id) pthread_kill(Id,SIGTERM)
 #else
 #define Allow_Thread_Cancel \
      pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL); \
@@ -578,13 +570,13 @@ typedef LPTHREAD_START_ROUTINE  THREAD_START; /* The type of the routine */
 #include <unistd.h>
 #include <signal.h>
 
-#if defined(Solaris) || defined(LINUX) || defined(Win32) || defined(BSD)
+#if defined(Solaris)||defined(LINUX)||defined(EMSCRIPTEN)||defined(Win32)||defined(BSD)
 #include <sys/types.h>
 #include <sys/wait.h>
 #endif
 
-typedef int THREAD_T;
-typedef int THREAD_ID;  /* The unique identifier of a thread */
+typedef intptr_t THREAD_T;
+typedef intptr_t THREAD_ID;  /* The unique identifier of a thread */
 typedef void *THREAD_ARG;
 typedef void *THREAD_RES_T;
 typedef void *(*THREAD_START)(void *);
